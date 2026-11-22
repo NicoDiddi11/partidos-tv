@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Partidos</title>
+<style>
+  :root {
+    --fondo: #151821; --panel: #1e2230; --panel2: #262b3b; --texto: #eef0f5; --tenue: #9aa1b5;
+    --acento: #ffbd0f; --vivo: #ff4d5e; --foco: #ffbd0f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--fondo); color: var(--texto);
+    font-family: "Roboto", system-ui, sans-serif; font-size: 15px; }
+  body { padding: 10px 32px 60px; }
+
+  /* Parte de arriba compacta: en la tele (960×540 px de página) dejaba lugar para solo 5 partidos. */
+  header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  h1 { margin: 0 10px 0 0; font-size: 19px; letter-spacing: .5px; }
+  h1 span { color: var(--acento); }
+  header button, #deportes button { font-size: 13px; padding: 2px 10px; border-radius: 7px; }
+  .fila { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 2px; }
+
+  button { font: inherit; color: var(--texto); background: var(--panel); border: 2px solid transparent;
+    border-radius: 8px; padding: 4px 12px; cursor: pointer; outline: none; }
+  button.on { background: var(--acento); color: #151821; font-weight: 700; }
+  /* Foco sin transform ni sombra: cambiar solo colores no obliga a recomponer capas en la tele. */
+  button:focus { border-color: var(--foco); }
+
+  /* El aviso de estado va en la misma fila del título, a la derecha (no ocupa un renglón propio). */
+  #estado { color: var(--tenue); margin-left: auto; font-size: 12px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
+
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 2px; color: var(--tenue); margin: 10px 0 2px; }
+  h2.vivo { color: var(--vivo); }
+
+  /* Los grupos fuera de pantalla no se dibujan ni se calculan hasta que hacen falta. */
+  .grupo { content-visibility: auto; contain-intrinsic-size: auto 90px; }
+  .liga { display: flex; align-items: center; gap: 6px; margin: 4px 0 1px; line-height: 1.1; }
+  .liga .nombre { font-size: 13px; color: var(--tenue); }
+  .liga .bandera { width: 18px; height: 13px; object-fit: cover; border-radius: 2px; }
+  .equipo { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .equipo span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .local { justify-content: flex-end; }
+  .escudo { width: 22px; height: 22px; object-fit: contain; flex: none; }
+  .liga button { padding: 0 8px; font-size: 15px; background: transparent; color: var(--tenue); }
+  .liga button.fav { color: var(--acento); }
+
+  .partido { display: grid; grid-template-columns: 70px 1fr 70px 1fr; align-items: center; gap: 10px;
+    width: 100%; text-align: left; padding: 3px 14px; margin: 2px 0; background: var(--panel); line-height: 1.15; }
+  .partido:focus { background: var(--panel2); }
+  .hora { font-variant-numeric: tabular-nums; color: var(--tenue); font-size: 13px; }
+  .hora .min { display: block; color: var(--vivo); font-weight: 700; }
+  .res { text-align: center; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .res.nada { color: var(--tenue); font-size: 13px; font-weight: 400; }
+  .partido.solo { grid-template-columns: 70px 1fr; }
+  .fila-p { display: flex; gap: 6px; margin: 1px 0; }
+  .fila-p .partido { flex: 1; margin: 0; min-width: 0; }
+  .alt { flex: none; width: 92px; font-size: 12px; color: var(--tenue); padding: 0 8px; }
+  .alt:focus { color: var(--texto); background: var(--panel2); }
+  .hora .cuenta { display: block; color: var(--acento); font-size: 11px; }
+  .hora .fin { display: block; color: var(--tenue); font-size: 11px; }
+  h2.man { color: #7fb4ff; }
+
+  .vacio { color: var(--tenue); padding: 30px 0; font-size: 17px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>⚽ <span>Partidos</span></h1>
+    <button class="f" id="bVivo">Solo en vivo</button>
+    <button class="f" id="bFav">★ Favoritos</button>
+    <button class="f" id="bAct">⟳ Actualizar</button>
+    <button class="f" id="bFuente">Fuente: …</button>
+    <div id="estado"></div>
+  </header>
+  <div class="fila" id="deportes"></div>
+  <main id="lista"></main>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------- estado guardado
+  function leerLS(k, def) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch (e) { return def; } }
+  function guardarLS(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+
+  var favs = leerLS("favs", {});          // { claveLiga: true }
+  var filtro = leerLS("filtro", { deporte: "", soloVivo: false, soloFav: false });
+  var principales = [];   // fuente principal (MadPlay77/FCTV33): resultado, minuto, escudos
+  var vips = [];          // VIPBox/VIPRow: más deportes, hora exacta, segundo link
+  var partidos = [];      // la unión de las dos, que es lo que se muestra
+  var sitios = [], sitioActual = 0;
+
+  var DEPORTES = {
+    football: "Fútbol", basketball: "Básquet", tennis: "Tenis", hockey: "Hockey",
+    "american-football": "Fútbol americano", baseball: "Béisbol", volleyball: "Vóley",
+    rugby: "Rugby", cricket: "Cricket", fighting: "Combate", motorsport: "Motor",
+    handball: "Handball", badminton: "Bádminton", "aussie-rules": "Australiano",
+    cycling: "Ciclismo", uefa: "UEFA", golf: "Golf", darts: "Dardos", snooker: "Snooker",
+    "table-tennis": "Tenis de mesa", others: "Otros"
+  };
+
+  // Secciones de VIPBox/VIPRow -> deporte con el mismo nombre que usa la fuente principal.
+  var VIP_DEP = {
+    football: "football", soccer: "football", basketball: "basketball", nba: "basketball", ncaab: "basketball",
+    cfb: "american-football", nfl: "american-football", ncaaf: "american-football", "american-football": "american-football",
+    "ice-hockey": "hockey", nhl: "hockey", hockey: "hockey", baseball: "baseball", mlb: "baseball",
+    tennis: "tennis", ufc: "fighting", boxing: "fighting", mma: "fighting", wwe: "fighting",
+    "fight-sport": "fighting", fighting: "fighting", volleyball: "volleyball", handball: "handball",
+    rugby: "rugby", afl: "aussie-rules", cricket: "cricket", golf: "golf", darts: "darts", snooker: "snooker",
+    f1: "motorsport", "formula-1": "motorsport", "moto-gp": "motorsport", nascar: "motorsport",
+    "moto-racing": "motorsport", "motor-racing": "motorsport", "auto-racing": "motorsport", cycling: "cycling",
+    "horse-racing": "others", events: "others", wrestling: "fighting", "table-tennis": "table-tennis"
+  };
+  // Mapa "dominio|sección" -> deporte, armado por la app a partir de las páginas de categoría de cada
+  // sitio (la página «Ice Hockey» de VIPRow dice qué ligas son de hockey). Manda sobre las reglas por nombre.
+  var MAPA_LIGAS = leerLS("mapaLigas", {});
+
+  // ---------------------------------------------------------------- banderas
+  // Países: clave en inglés (como los nombra VIPBox/VIPRow en sus íconos) -> [código, nombre en español].
+  // El código es el de flagcdn.com (incluye gb-eng, gb-sct, gb-wls para el Reino Unido).
+  var PAISES = {
+    england: ["gb-eng", "Inglaterra"], scotland: ["gb-sct", "Escocia"], wales: ["gb-wls", "Gales"],
+    "northern-ireland": ["gb-nir", "Irlanda del Norte"], "united-kingdom": ["gb", "Reino Unido"], ireland: ["ie", "Irlanda"],
+    spain: ["es", "España"], france: ["fr", "Francia"], germany: ["de", "Alemania"], italy: ["it", "Italia"],
+    portugal: ["pt", "Portugal"], netherlands: ["nl", "Países Bajos"], belgium: ["be", "Bélgica"],
+    switzerland: ["ch", "Suiza"], austria: ["at", "Austria"], turkey: ["tr", "Turquía"], greece: ["gr", "Grecia"],
+    poland: ["pl", "Polonia"], romania: ["ro", "Rumania"], croatia: ["hr", "Croacia"], serbia: ["rs", "Serbia"],
+    "czech-republic": ["cz", "República Checa"], czechia: ["cz", "República Checa"], slovakia: ["sk", "Eslovaquia"],
+    hungary: ["hu", "Hungría"], denmark: ["dk", "Dinamarca"], sweden: ["se", "Suecia"], norway: ["no", "Noruega"],
+    finland: ["fi", "Finlandia"], russia: ["ru", "Rusia"], ukraine: ["ua", "Ucrania"], bulgaria: ["bg", "Bulgaria"],
+    israel: ["il", "Israel"], cyprus: ["cy", "Chipre"], albania: ["al", "Albania"], slovenia: ["si", "Eslovenia"],
+    "bosnia-and-herzegovina": ["ba", "Bosnia"], bosnia: ["ba", "Bosnia"], iceland: ["is", "Islandia"],
+    lithuania: ["lt", "Lituania"], latvia: ["lv", "Letonia"], estonia: ["ee", "Estonia"], montenegro: ["me", "Montenegro"],
+    "north-macedonia": ["mk", "Macedonia del Norte"], georgia: ["ge", "Georgia"], armenia: ["am", "Armenia"],
+    azerbaijan: ["az", "Azerbaiyán"], kazakhstan: ["kz", "Kazajistán"], belarus: ["by", "Bielorrusia"], moldova: ["md", "Moldavia"],
+    argentina: ["ar", "Argentina"], brazil: ["br", "Brasil"], uruguay: ["uy", "Uruguay"], chile: ["cl", "Chile"],
+    colombia: ["co", "Colombia"], peru: ["pe", "Perú"], ecuador: ["ec", "Ecuador"], bolivia: ["bo", "Bolivia"],
+    paraguay: ["py", "Paraguay"], venezuela: ["ve", "Venezuela"], mexico: ["mx", "México"],
+    "united-states": ["us", "Estados Unidos"], usa: ["us", "Estados Unidos"], canada: ["ca", "Canadá"],
+    "costa-rica": ["cr", "Costa Rica"], guatemala: ["gt", "Guatemala"], honduras: ["hn", "Honduras"],
+    "el-salvador": ["sv", "El Salvador"], panama: ["pa", "Panamá"], "dominican-republic": ["do", "Rep. Dominicana"],
+    "puerto-rico": ["pr", "Puerto Rico"], cuba: ["cu", "Cuba"], jamaica: ["jm", "Jamaica"],
+    suriname: ["sr", "Surinam"], haiti: ["ht", "Haití"], "trinidad-and-tobago": ["tt", "Trinidad y Tobago"],
+    barbados: ["bb", "Barbados"], "antigua-and-barbuda": ["ag", "Antigua y Barbuda"],
+    "st-kitts-and-nevis": ["kn", "San Cristóbal y Nieves"], "saint-kitts-and-nevis": ["kn", "San Cristóbal y Nieves"],
+    nicaragua: ["ni", "Nicaragua"], belize: ["bz", "Belice"], guyana: ["gy", "Guyana"],
+    curacao: ["cw", "Curazao"], aruba: ["aw", "Aruba"], bermuda: ["bm", "Bermudas"],
+    luxembourg: ["lu", "Luxemburgo"], malta: ["mt", "Malta"], "faroe-islands": ["fo", "Islas Feroe"],
+    andorra: ["ad", "Andorra"], "san-marino": ["sm", "San Marino"], gibraltar: ["gi", "Gibraltar"],
+    kenya: ["ke", "Kenia"], uganda: ["ug", "Uganda"], tanzania: ["tz", "Tanzania"], zambia: ["zm", "Zambia"],
+    angola: ["ao", "Angola"], ethiopia: ["et", "Etiopía"], rwanda: ["rw", "Ruanda"], libya: ["ly", "Libia"],
+    oman: ["om", "Omán"], syria: ["sy", "Siria"], lebanon: ["lb", "Líbano"], uzbekistan: ["uz", "Uzbekistán"],
+    mongolia: ["mn", "Mongolia"], myanmar: ["mm", "Myanmar"], cambodia: ["kh", "Camboya"], nepal: ["np", "Nepal"],
+    japan: ["jp", "Japón"], "south-korea": ["kr", "Corea del Sur"], korea: ["kr", "Corea del Sur"], china: ["cn", "China"],
+    india: ["in", "India"], australia: ["au", "Australia"], "new-zealand": ["nz", "Nueva Zelanda"],
+    "south-africa": ["za", "Sudáfrica"], egypt: ["eg", "Egipto"], morocco: ["ma", "Marruecos"], tunisia: ["tn", "Túnez"],
+    algeria: ["dz", "Argelia"], nigeria: ["ng", "Nigeria"], mali: ["ml", "Malí"], senegal: ["sn", "Senegal"],
+    ghana: ["gh", "Ghana"], cameroon: ["cm", "Camerún"], "ivory-coast": ["ci", "Costa de Marfil"],
+    "saudi-arabia": ["sa", "Arabia Saudita"], qatar: ["qa", "Catar"], "united-arab-emirates": ["ae", "Emiratos Árabes Unidos"],
+    iran: ["ir", "Irán"], iraq: ["iq", "Irak"], jordan: ["jo", "Jordania"], kuwait: ["kw", "Kuwait"], bahrain: ["bh", "Baréin"],
+    philippines: ["ph", "Filipinas"], indonesia: ["id", "Indonesia"], thailand: ["th", "Tailandia"],
+    vietnam: ["vn", "Vietnam"], malaysia: ["my", "Malasia"], singapore: ["sg", "Singapur"], taiwan: ["tw", "Taiwán"],
+    "hong-kong": ["hk", "Hong Kong"], pakistan: ["pk", "Pakistán"], "sri-lanka": ["lk", "Sri Lanka"], bangladesh: ["bd", "Bangladés"]
+  };
+  // Íconos de VIPBox que no son países pero sí indican uno (ligas de EE. UU.), con un nombre más claro.
+  var ICONOS_LIGA = {
+    "college-football": ["us", "EE. UU.: Fútbol americano universitario"],
+    "college-basketball": ["us", "EE. UU.: Básquet universitario"],
+    nba: ["us", "EE. UU.: NBA"], nhl: ["us", "EE. UU.: NHL"], nfl: ["us", "EE. UU.: NFL"],
+    mlb: ["us", "EE. UU.: MLB"], mls: ["us", "EE. UU.: MLS"], wnba: ["us", "EE. UU.: WNBA"]
+  };
+  // Íconos sin país (eventos internacionales): sin bandera, solo un nombre prolijo.
+  var ICONOS_SIN_PAIS = { mma: "MMA", ufc: "UFC", boxing: "Boxeo", golf: "Golf", darts: "Dardos", atp: "ATP",
+    wta: "WTA", rugby: "Rugby", handball: "Handball", football: "Fútbol", basketball: "Básquet",
+    television: "Canales", pentathlon: "Pentatlón", tennis: "Tenis", cricket: "Cricket" };
+  // Ligas que MadPlay77 lista sin país ni bandera, pero se sabe de dónde son.
+  var LIGAS_CON_PAIS = [
+    [/^(l\.?f\.?-?2|segunda feb|primera feb|liga femenina challenge|liga femenina endesa|liga prime futsal|liga endesa|lf endesa)/i, "es"],
+    [/^(nba|ncaa|nfl|mlb|nhl|wnba|mls)\b/i, "us"],
+    [/^(nascar|major league table tennis|pro padel league)/i, "us"],
+    [/^(liga nacional de futsal|lnf\b)|cresol/i, "br"]
+  ];
+
+  // Nombre en español (como lo escribe MadPlay77: "Inglaterra:") -> código.
+  var CODIGO_POR_NOMBRE = {};
+  Object.keys(PAISES).forEach(function (k) { CODIGO_POR_NOMBRE[sinAcentos(PAISES[k][1])] = PAISES[k][0]; });
+  CODIGO_POR_NOMBRE["eeuu"] = CODIGO_POR_NOMBRE["ee uu"] = CODIGO_POR_NOMBRE["estados unidos"] = "us";
+  CODIGO_POR_NOMBRE["holanda"] = "nl"; CODIGO_POR_NOMBRE["corea"] = "kr"; CODIGO_POR_NOMBRE["chequia"] = "cz";
+  CODIGO_POR_NOMBRE["rumania"] = CODIGO_POR_NOMBRE["rumanía"] = "ro";
+  // Como los escribe MadPlay77 cuando no los traduce.
+  CODIGO_POR_NOMBRE["suriname"] = "sr"; CODIGO_POR_NOMBRE["st kitts and nevis"] = "kn";
+  CODIGO_POR_NOMBRE["saint kitts and nevis"] = "kn"; CODIGO_POR_NOMBRE["antigua and barbuda"] = "ag";
+  CODIGO_POR_NOMBRE["trinidad and tobago"] = "tt"; CODIGO_POR_NOMBRE["curacao"] = "cw";
+
+  function sinAcentos(s) {
+    return (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[.]/g, "").trim();
+  }
+  function urlBandera(codigo) { return codigo ? "https://flagcdn.com/w40/" + codigo + ".png" : ""; }
+
+  /**
+   * MadPlay77 pega la sede al nombre de la liga ("National Hockey League, TD Garden"). Como el grupo
+   * junta todos los partidos de la liga, mostraría la sede del primero para todos: se saca.
+   * "Liga Brasileña, Serie A" no tiene sede y queda igual.
+   */
+  var SEDE = /(arena|center|centre|garden|coliseum|saddledome|place|palacio|pavell|pabell|palais|\bpala|halle|dome|stadium|estadio|field|park|hall|inalpi|forum|centro|indiv\.|masc\.|fem\.)/i;
+  function limpiarLiga(l) {
+    var p = l.split(/,\s+/);
+    if (p.length > 1 && SEDE.test(p.slice(1).join(" "))) l = p[0];
+    return l.replace(/Asociaci[oó]n Nacional de Basquetbol/i, "NBA")
+            .replace(/National Hockey League/i, "NHL")
+            .replace(/American Hockey League/i, "AHL");
+  }
+
+  /** Bandera para una liga de MadPlay77 que vino sin imagen: por el país del prefijo o por la liga. */
+  function banderaDeLiga(liga) {
+    var t = (liga || "").replace(/^[:\s ]+/, "");
+    var dos = t.indexOf(":");
+    if (dos > 0) {
+      var cod = CODIGO_POR_NOMBRE[sinAcentos(t.slice(0, dos))];
+      if (cod) return urlBandera(cod);
+    }
+    for (var i = 0; i < LIGAS_CON_PAIS.length; i++) if (LIGAS_CON_PAIS[i][0].test(t)) return urlBandera(LIGAS_CON_PAIS[i][1]);
+    return "";
+  }
+
+  /** País al principio del nombre de una liga de VIPRow: "bolivia-lfpb" -> bolivia; "brasil-serie-a" -> brazil. */
+  function paisDeLiga(slug) {
+    if (!slug) return "";
+    var p = slug.split("-");
+    for (var n = Math.min(3, p.length - 1); n >= 1; n--) {
+      var k = p.slice(0, n).join("-");
+      if (PAISES[k]) return k;
+    }
+    return { brasil: "brazil", turkish: "turkey", russian: "russia", polish: "poland", czech: "czech-republic",
+             swiss: "switzerland", scottish: "scotland", belarusian: "belarus", danish: "denmark" }[p[0]] || "";
+  }
+
+  // ---------------------------------------------------------------- memoria de equipos
+  // De lo que se vio en MadPlay77 (liga, bandera, escudo de cada equipo). Sirve cuando MadPlay77 saca un
+  // partido de su lista y queda solo en VIPBox, que muchas veces no dice ni el país (Oliveirense: "básquet").
+  var MEMORIA = leerLS("memoriaEquipos", {});
+  function claveEquipo(n) { return palabras(n).join(" "); }
+
+  function recordarEquipos(lista) {
+    var ahora = Date.now(), cambio = false;
+    lista.forEach(function (p) {
+      if (!p.visita || !p.liga) return;
+      [[p.local, p.cmp1, p.logo1], [p.visita, p.cmp2, p.logo2]].forEach(function (lado) {
+        var dato = { nombre: lado[0], liga: p.liga, claveLiga: p.claveLiga, bandera: p.bandera,
+                     deporte: p.deporte, logo: lado[2] || "", t: ahora };
+        [claveEquipo(lado[0]), claveEquipo(lado[1])].forEach(function (k) {
+          if (!k) return;
+          var ya = MEMORIA[k];
+          // Solo se reescribe si es nuevo, cambió de liga/escudo o pasó una hora: así no se graban
+          // ~200 KB en la tele cada 2 minutos para no cambiar nada.
+          if (ya && ya.claveLiga === dato.claveLiga && ya.logo === dato.logo && ahora - (ya.t || 0) < 3600 * 1000) return;
+          MEMORIA[k] = dato; cambio = true;
+        });
+      });
+    });
+    Object.keys(MEMORIA).forEach(function (k) {                // se olvida lo de hace más de 3 días
+      if (ahora - (MEMORIA[k].t || 0) > 3 * 24 * 3600 * 1000) { delete MEMORIA[k]; cambio = true; }
+    });
+    if (cambio) { guardarLS("memoriaEquipos", MEMORIA); CACHE_MEMORIA = {}; }
+  }
+
+  function buscarEquipo(nombre, deporte) {
+    var k = claveEquipo(nombre), m = MEMORIA[k];
+    if (m && m.deporte === deporte) return m;
+    for (var c in MEMORIA) {
+      var e = MEMORIA[c];
+      if (e.deporte === deporte && mismoEquipo(e.nombre, nombre)) return e;
+    }
+    return null;
+  }
+
+  // Resultado de la búsqueda por evento (la lista se rearma con cada filtro: no repetir el trabajo).
+  var CACHE_MEMORIA = {};
+
+  /** Evento solo de VIPBox: si los dos equipos se recuerdan de la misma liga, va a ese grupo. */
+  function aplicarMemoria(v) {
+    if (!v.visita) return;
+    var clave = v.id + "|" + v.deporte;
+    if (!(clave in CACHE_MEMORIA)) {
+      var a0 = buscarEquipo(v.local, v.deporte), b0 = buscarEquipo(v.visita, v.deporte);
+      CACHE_MEMORIA[clave] = (a0 && b0 && a0.claveLiga === b0.claveLiga) ? [a0, b0] : null;
+    }
+    var par = CACHE_MEMORIA[clave];
+    if (!par) return;
+    var a = par[0], b = par[1];
+    v.liga = limpiarLiga(a.liga); v.claveLiga = a.claveLiga;   // limpiarLiga: memorias viejas con la sede
+    if (a.bandera) v.bandera = a.bandera;
+    v.logo1 = a.logo || v.logo1; v.logo2 = b.logo || v.logo2;
+  }
+
+  /** "brazil-nbb" (país brazil) -> "NBB"; "pga-tour" -> "PGA Tour"; "taca-de-portugal" -> "Taça de Portugal". */
+  function nombreLigaRow(seccion, pais) {
+    var s = seccion || "";
+    if (pais && s.indexOf(pais + "-") === 0) s = s.slice(pais.length + 1);   // sin el país repetido
+    if (pais === "brazil" && s.indexOf("brasil-") === 0) s = s.slice(7);
+    var SIGLAS = /^(nbb|bbl|acb|snl|ehf|ihf|pga|lpga|mma|ufc|nba|nhl|nfl|mls|atp|wta|lnb|lfpb|fiba|ksw|kok|wow|usl|cpl)$/;
+    var MINUS = /^(de|del|la|el|y|of|the)$/;
+    var r = s.split("-").filter(Boolean).map(function (w, i) {
+      if (SIGLAS.test(w)) return w.toUpperCase();
+      if (i > 0 && MINUS.test(w)) return w;
+      return w.charAt(0).toUpperCase() + w.slice(1);
+    }).join(" ");
+    return r.replace(/^Taca /, "Taça ").replace(/ A1 Femminile$/, " A1 Femenina");
+  }
+
+  function dosDigitos(n) { return (n < 10 ? "0" : "") + n; }
+  function horaLocal(ms) { var d = new Date(ms); return dosDigitos(d.getHours()) + ":" + dosDigitos(d.getMinutes()); }
+  function minutosDelDia(hhmm) { var m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || ""); return m ? +m[1] * 60 + +m[2] : -1; }
+
+  function titulo(slug) {
+    return (slug || "").split("-").filter(Boolean)
+      .map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
+  }
+
+  // ---------------------------------------------------------------- interpretación de cada partido
+  // URL: /es/<deporte>/<liga>[-match]-<id>/<equipos>[-<fecha>].html
+  // Texto visible: hora, [minuto/HT], local, [goles, goles], visitante, [cuotas…]
+  function interpretar(it) {
+    var p;
+    try { p = new URL(it.href).pathname.split("/").filter(Boolean); } catch (e) { return null; }
+    if (p.length && p[0].length === 2) p.shift();               // idioma
+    var deporte = p[0] || "otros";
+    // FCTV33: "premier-league-match-4414068"  ·  MadPlay77: "spanish-primera-division-4468274"
+    var m = (p[1] || "").match(/^(.*?)(?:-match)?-(\d+)$/);
+    var ligaSlug = m ? m[1] : "";
+    // "philadelphia-76ers-vs-milwaukee-bucks" (MadPlay77) o "...-11-2026" (FCTV33): nombres originales,
+    // útiles cuando el texto visible viene traducido ("Los del 76 de Filadelfia").
+    var equiposSlug = (p[2] || "").replace(/\.html$/, "").replace(/-\d{1,2}-\d{4}$/, "").replace(/-\d{4,8}$/, "");
+    var slugs = equiposSlug.split("-vs-").map(function (s) { return s.replace(/-+/g, " "); });
+
+    var lineas = (it.text || "").split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+    var hora = "", min = "", nombres = [], goles = [];
+    lineas.forEach(function (l) {
+      if (!hora && /^\d{1,2}:\d{2}$/.test(l)) { hora = l; return; }
+      if (/^(1 X 2|BET|-|VS)$/i.test(l)) return;
+      if (/^HT\s+\d+\s*-\s*\d+$/i.test(l)) return;                 // resultado del entretiempo
+      if (hora && !nombres.length && !min && /^(HT|FT|ET|PEN|AET|\d{1,3}\+?|\d{1,3}')$/i.test(l)) { min = l; return; }
+      if (/^\d+([.,]\d+)?$/.test(l)) {                            // número: gol o cuota
+        if (nombres.length === 1 && /^\d+$/.test(l) && goles.length < 2) goles.push(l);
+        return;
+      }
+      if (nombres.length < 2) nombres.push(l);
+    });
+    if (!nombres.length && equiposSlug) {
+      nombres = equiposSlug.split("-vs-").map(titulo);
+    }
+    // Peleas y similares vienen en una sola línea: "OKTAGON 98: Legierski vs Buchinger".
+    if (nombres.length === 1 && /\s+vs\.?\s+/i.test(nombres[0])) {
+      var linea = nombres[0].replace(/^[^:]{1,40}:\s*/, "");
+      var dosLados = linea.split(/\s+vs\.?\s+/i);
+      if (dosLados.length === 2 && dosLados[0] && dosLados[1]) nombres = dosLados;
+    }
+
+    var liga = (it.liga || "").replace(/ /g, " ").replace(/\s*\n\s*/g, " ").replace(/\s*:\s*/, ": ").trim();
+    if (!liga || liga.length > 80 || /\d{1,2}:\d{2}/.test(liga)) liga = titulo(ligaSlug);
+    liga = liga.replace(/\s*1 X 2\s*$/, "").replace(/^:\s*/, "");   // ": Segunda FEB 1 X 2" -> "Segunda FEB"
+    liga = limpiarLiga(liga);
+    // NBA: MadPlay77 traduce los nombres ("Los del 76 de Filadelfia", "Ciervos de Milwaukee");
+    // el link trae los originales (philadelphia-76ers, milwaukee-bucks).
+    if (/^Estados Unidos: NBA$/.test(liga) && slugs.length === 2 && slugs[0] && slugs[1]) {
+      nombres = slugs.map(function (s) {
+        return s.split(" ").map(function (w) { return /^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
+      });
+    }
+
+    var fin = /^(FT|AET|PEN)$/i.test(min);
+    // MadPlay77 pone el tenis de mesa en «tennis» ("Major League Table Tennis").
+    if (/table tennis|tenis de mesa|ping.?pong/i.test(liga + " " + nombres.join(" "))) deporte = "table-tennis";
+    // MadPlay77 manda golf, curling, esquí… a "others": se afina por el nombre (el golf dura todo el día).
+    if (deporte === "others") {
+      var afinado = deporteDeLiga(liga + " " + nombres.join(" "), false);
+      if (afinado === "others" && /cme group|tour championship|rsm classic|open de sea island|\bround \d\b|\b\d+e tour\b/i.test(liga + " " + nombres.join(" "))) afinado = "golf";
+      deporte = afinado;
+    }
+    return {
+      logo1: it.logo1 || "",
+      logo2: it.logo2 || "",
+      bandera: it.bandera || banderaDeLiga(liga),   // si el sitio no la trae, se deduce del país
+      href: it.href,
+      id: m ? m[2] : it.href,
+      deporte: deporte,
+      liga: liga || "Otros",
+      claveLiga: deporte + "/" + (ligaSlug || liga),
+      hora: hora,
+      min: min,
+      vivo: !!min && !fin,
+      terminado: fin,
+      local: nombres[0] || "",
+      visita: nombres[1] || "",
+      goles: goles,
+      vipHref: "",          // segundo link, si VIPBox tiene el mismo partido
+      t: horaHoy(hora, !!min || it.enVivo === true),
+      // Señal del propio sitio (ícono de transmisión visible = en vivo). null si la lista es vieja.
+      sitioEnVivo: typeof it.enVivo === "boolean" ? it.enVivo : null,
+      // Para comparar con otras fuentes: nombre visible + nombre original del link.
+      cmp1: (nombres[0] || "") + " " + (slugs.length === 2 ? slugs[0] : ""),
+      cmp2: (nombres[1] || "") + " " + (slugs.length === 2 ? slugs[1] : "")
+    };
+  }
+
+  /**
+   * Hora "HH:MM" de la fuente principal -> instante. La lista de MadPlay77 es la del día, así que es
+   * hoy; solo si la hora quedó más de 12 h atrás se toma como de madrugada del día siguiente
+   * (a las 23:00, un "01:00" es mañana; a las 19:30, un "13:00" es de hoy y ya se jugó).
+   */
+  function horaHoy(hhmm, empezado) {
+    var m = minutosDelDia(hhmm);
+    if (m < 0) return 0;
+    var ahora = Date.now(), h = 3600 * 1000;
+    var d = new Date(ahora); d.setHours(Math.floor(m / 60), m % 60, 0, 0);
+    // Pasada la medianoche: a las 00:30, "23:00" es de AYER (hace 1,5 h), no de hoy a la noche.
+    if (d.getTime() > ahora + 18 * h) d.setDate(d.getDate() - 1);
+    // Antes de la medianoche: a las 23:00, "01:00" es de MAÑANA. Lo ya empezado nunca va a mañana.
+    else if (!empezado && d.getTime() < ahora - 16 * h) d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+
+  // Cuánto dura (de punta a punta, con entretiempos) un partido/evento de cada deporte, en minutos.
+  // MadPlay77 solo marca el minuto en fútbol; en el resto el estado se deduce de la hora con esto.
+  var DURACION = {
+    football: 120, basketball: 130, hockey: 165,   // básquet FIBA ~2 h; la NBA la confirma VIPBox mientras dura "american-football": 210, baseball: 210,
+    tennis: 180, volleyball: 150, handball: 100, rugby: 110, cricket: 240, "aussie-rules": 150,
+    fighting: 300, motorsport: 180, golf: 600, darts: 300, snooker: 300, cycling: 330,
+    badminton: 120, "table-tennis": 120, others: 180
+  };
+
+  /**
+   * Estado de un partido que el sitio no informa: en vivo si ya empezó y no pasó lo que dura;
+   * terminado si ya pasó. Si VIPBox lo tiene en su página «en vivo ahora», es en vivo seguro.
+   */
+  /**
+   * El ícono de transmisión de MadPlay77 es la señal de "en vivo". Si el sitio lo cambia (otro nombre de
+   * imagen), la app vería "sin ícono" en todo y daría por TERMINADO lo que se está jugando. Se detecta:
+   *  - ningún ícono, pero hay partidos con minuto en juego (fútbol) → la señal se rompió;
+   *  - ícono en todos, incluso en partidos que empiezan en más de una hora → también.
+   * En esos casos se ignora la señal y se usa el cálculo por hora, como antes de la v9.
+   */
+  var senalRota = false;
+  function validarSenalEnVivo(lista) {
+    var conSenal = lista.filter(function (x) { return x.sitioEnVivo !== null; });
+    if (!conSenal.length) { senalRota = false; return; }
+    var alguno = conSenal.some(function (x) { return x.sitioEnVivo; });
+    var enJuego = conSenal.some(function (x) { return x.min && !x.terminado && x.min !== "HT"; });
+    var futurosConIcono = conSenal.some(function (x) { return x.sitioEnVivo && x.t > Date.now() + 3600 * 1000; });
+    var todos = conSenal.every(function (x) { return x.sitioEnVivo; });
+    senalRota = (!alguno && enJuego) || (todos && futurosConIcono);
+    if (senalRota) lista.forEach(function (x) { x.sitioEnVivo = null; });
+  }
+
+  function esPais(nombre) {
+    var n = sinAcentos(nombre);
+    return !!(PAISES[n.replace(/\s+/g, "-")] || CODIGO_POR_NOMBRE[n] || n === "usa" || n === "eeuu");
+  }
+
+  function duracion(x) {
+    // Tenis entre países (Copa Davis, Billie Jean King): es una serie de varios partidos.
+    if (x.deporte === "tennis" && x.visita && esPais(x.local) && esPais(x.visita)) return 360;
+    return DURACION[x.deporte] || 180;
+  }
+
+  function estimarEstado(x) {
+    if (x.min || x.canal) return;                  // el sitio ya dijo el estado (minuto, HT, FT)
+    var ahora = Date.now();
+    // MadPlay77/FCTV33 muestran el ícono de transmisión solo en lo que se está jugando, en TODOS los
+    // deportes: si está esa señal, manda el sitio. Sin ícono: terminado si ya pasó la hora, si no próximo.
+    if (x.sitioEnVivo === true) { x.vivo = true; x.terminado = false; x.estimado = true; return; }
+    if (x.sitioEnVivo === false) {
+      x.vivo = false; x.terminado = !!x.t && ahora >= x.t; x.estimado = x.terminado; return;
+    }
+    // Sin señal del sitio (VIPBox, o una lista guardada vieja): se deduce por la hora.
+    if (!x.t) return;
+    var dur = duracion(x) * 60000;
+    // En VIPBox «en vivo ahora»: en vivo seguro (con un tope, porque VIPBox tarda en sacar lo terminado).
+    if (x.vipHref && ahora >= x.t - 5 * 60000 && ahora < x.t + dur * 1.5) { x.vivo = true; x.terminado = false; x.estimado = true; return; }
+    // Lo que está solo en «en vivo ahora» de VIPBox/VIPRow: el sitio dice que sigue; margen de 1,5× (alargues,
+    // demoras). Mejor mostrar un rato de más algo terminado que esconder algo que se está jugando.
+    var limite = x.soloVip ? dur * 1.5 : dur;
+    if (ahora >= x.t && ahora < x.t + limite) { x.vivo = true; x.terminado = false; x.estimado = true; return; }
+    if (ahora >= x.t + limite) { x.vivo = false; x.terminado = true; x.estimado = true; }
+  }
+
+  // Palabras que no distinguen un evento de otro ("UFC Fight Night", "Day 3", "Round 2"…).
+  var RELLENO_EVENTO = /^(fight|night|ufc|mma|boxing|boxeo|kickboxing|session|day|round|tour|live|the|of|de|la|el|and|vs|en|vivo|men|women|mens|womens)$/;
+  function palabrasEvento(x) {
+    return sinAcentos((x.local || "") + " " + (x.visita || "") + " " + (x.liga || ""))
+      .replace(/[^a-z0-9]+/g, " ").split(" ")
+      .filter(function (w) { return w.length >= 2 && !RELLENO_EVENTO.test(w); });
+  }
+  /**
+   * Eventos sin dos equipos (veladas de combate, torneos de golf…): mismo deporte, hora cercana
+   * (±30 min) y al menos 2 palabras propias en común ("WOW 34" = "MMA: WOW 34";
+   * "Freiburg, Germany | King of Kings" = "KOK 130 Freiburg, Germany").
+   */
+  function mismoEvento(a, b) {
+    if (!deporteCompatible(a.deporte, b.deporte) || difMinutos(a.hora, b.hora) > 30) return false;
+    var pb = {}; palabrasEvento(b).forEach(function (w) { pb[w] = true; });
+    var comunes = {}; palabrasEvento(a).forEach(function (w) { if (pb[w]) comunes[w] = true; });
+    return Object.keys(comunes).length >= 2;
+  }
+  var DEPORTES_DE_EVENTO = { fighting: 1, golf: 1, others: 1, motorsport: 1, darts: 1, cycling: 1, snooker: 1 };
+
+  // ---------------------------------------------------------------- VIPBox / VIPRow
+  // {href, titulo: "Newcastle United vs Arsenal", t: "2026-11-21T17:30+00:00", pais: "england", seccion: "football"}
+  function interpretarVip(it) {
+    var titulo0 = (it.titulo || "").trim();
+    if (!titulo0) return null;
+    var ligaTxt = "", resto = titulo0;
+    var dos = titulo0.indexOf(": ");
+    if (dos > 0 && dos < 60) { ligaTxt = titulo0.slice(0, dos); resto = titulo0.slice(dos + 2); }
+    var partes = resto.split(/\s+(?:vs\.?|v)\s+/i);
+    var t = it.t ? Date.parse(it.t) : 0;
+    if (isNaN(t)) t = 0;
+    // Solo lo que ya empezó (pedido de Nicolás): lo de más tarde aparece solo cuando arranque.
+    if (t && t > Date.now()) return null;
+    // VIPBox agrupa por deporte ("/football/…"); VIPRow, por liga ("/ligue-1/…", "/swiss-snl/…").
+    var esRow = /viprow/i.test(it.href);
+    var dominio = "";
+    try { dominio = new URL(it.href).hostname.split(".").slice(-2).join("."); } catch (e) {}
+    var deporte = MAPA_LIGAS[dominio + "|" + it.seccion] || VIP_DEP[it.seccion] ||
+                  deporteDeLiga(it.seccion + " " + (it.pais || ""), esRow);
+    var pais = (it.pais || "").split(" ")[0], pais2 = (it.pais2 || "").split(" ")[0];
+    // Liga según VIPRow (la propia si es de VIPRow; si no, la que trajo VIPRow para el mismo evento).
+    var ligaSlug = esRow ? it.seccion : (it.seccion2 || "");
+    // País: del ícono de cualquiera de los dos sitios, o del nombre de la liga ("bolivia-lfpb" -> Bolivia).
+    var clavePais = PAISES[pais] ? pais : (PAISES[pais2] ? pais2 : paisDeLiga(ligaSlug));
+    var infoPais = PAISES[clavePais];
+    var infoLiga = ICONOS_LIGA[pais] || ICONOS_LIGA[pais2] || ICONOS_LIGA[it.seccion] || ICONOS_LIGA[ligaSlug];
+    var codigo = infoPais ? infoPais[0] : (infoLiga ? infoLiga[0] : "");
+    var nombreGrupo = infoLiga ? infoLiga[1] : (infoPais ? infoPais[1] : (ICONOS_SIN_PAIS[pais] || nombreLigaRow(pais, "")));
+    var liga;
+    if (ligaTxt) liga = (infoPais ? infoPais[1] + ": " : "") + ligaTxt;          // "USL Championship Final"
+    else if (ligaSlug && !infoLiga) liga = (infoPais ? infoPais[1] + ": " : "") + nombreLigaRow(ligaSlug, clavePais);   // "Bolivia: LFPB"
+    else liga = nombreGrupo || "VIPBox";
+    var vivo = !t || t <= Date.now() + 5 * 60 * 1000;
+    return {
+      href: it.href, id: "v:" + it.href, deporte: deporte, liga: liga,
+      claveLiga: "vip/" + deporte + "/" + (ligaTxt || ligaSlug || pais),
+      hora: t ? horaLocal(t) : "", min: "", t: t,
+      vivo: vivo, terminado: false, canal: !t,
+      local: partes.length === 2 ? partes[0] : resto, visita: partes.length === 2 ? partes[1] : "",
+      goles: [], logo1: "", logo2: "", bandera: urlBandera(codigo), vipHref: "", soloVip: true,
+      fuente: it.fuente || (esRow ? "VIPRow" : "VIPBox"),
+      cmp1: partes.length === 2 ? partes[0] : resto, cmp2: partes.length === 2 ? partes[1] : ""
+    };
+  }
+
+  /** Deporte a partir del nombre de la liga (VIPRow): "germany-bbl" → básquet, "swiss-snl" → hockey. */
+  function deporteDeLiga(txt, esRow) {
+    var s = (txt || "").toLowerCase();
+    if (/equestrian|pentathlon|other-events|television/.test(s)) return "others";
+    // Ligas con nombre engañoso (verificadas contra las páginas de categoría de VIPRow).
+    if (/brazil-superliga|serie-a1-femminile|efeler|volley/.test(s)) return "volleyball";
+    if (/college-football|\bnfl\b|cfb|american-football|ncaaf|\bcfl\b/.test(s)) return "american-football";
+    if (/basket|\bbbl\b|\bacb\b|\bnba\b|\bnbb\b|\bnbl\b|\btbl\b|\bvtb\b|\blkl\b|fiba|ncaab|euroleague|lega-basket|-lnb/.test(s)) return "basketball";
+    if (/hockey|\bnhl\b|\bkhl\b|\bshl\b|\bahl\b|\bvhl\b|-snl\b|-del\b|\bliiga\b|metal-ligaen|eishockey|czech-superliga|extraleague/.test(s)) return "hockey";
+    if (/mma|ufc|boxing|wwe|wrestling|fight|pfl|bellator|oktagon/.test(s)) return "fighting";
+    if (/motor-racing|auto-racing|motorsport|super-gt|\bdtm\b|wec\b|imsa/.test(s)) return "motorsport";
+    if (/table-tennis/.test(s)) return "table-tennis";
+    if (/union-|rugby-league|premiership-rugby|top-14|super-rugby|six-nations/.test(s)) return "rugby";
+    if (/golf|\bpga\b|lpga|dp-world/.test(s)) return "golf";
+    if (/handball|\behf\b|\bihf\b/.test(s)) return "handball";
+    if (/tennis|\batp\b|\bwta\b|davis-cup|billie-jean/.test(s)) return "tennis";
+    if (/volley/.test(s)) return "volleyball";
+    if (/rugby|super-rugby|six-nations/.test(s)) return "rugby";
+    if (/formula|\bf1\b|moto-?gp|nascar|indycar|wrc|rally/.test(s)) return "motorsport";
+    if (/darts/.test(s)) return "darts";
+    if (/snooker/.test(s)) return "snooker";
+    if (/cricket|\bipl\b|big-bash/.test(s)) return "cricket";
+    if (/baseball|\bmlb\b|\bkbo\b|\bnpb\b/.test(s)) return "baseball";
+    // En VIPRow lo que queda son ligas de fútbol ("ligue-1", "serie-a", "friendly").
+    return esRow ? "football" : "others";
+  }
+
+  // Palabras que no ayudan a reconocer un equipo ("FC", "Club", "Women"…).
+  var RELLENO = /^(fc|cf|ac|sc|cd|ud|sd|ca|cs|fk|sk|ss|as|us|afc|bk|bc|if|club|de|del|la|el|los|las|the|united|city|real|women|woman|w|f|fem|femenino|ladies|u\d\d|ii|b|basketball|basket|baloncesto|team|saint|san|sport|sporting|st|vs|state|north|south|east|west|northern|southern|eastern|western|central|university|univ|college|tech)$/;
+
+  function palabras(nombre) {
+    return (nombre || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, " ").split(" ")
+      .filter(function (w) { return w.length >= 3 && !RELLENO.test(w); });
+  }
+
+  /** ¿Es el mismo equipo? Alcanza con una palabra en común o con que empiecen igual (5 letras). */
+  function mismoEquipo(a, b) {
+    var pa = palabras(a), pb = palabras(b);
+    for (var i = 0; i < pa.length; i++) for (var j = 0; j < pb.length; j++) {
+      if (pa[i] === pb[j]) return true;
+      if (pa[i].length >= 5 && pb[j].length >= 5 && pa[i].slice(0, 5) === pb[j].slice(0, 5)) return true;
+    }
+    return false;
+  }
+
+  function difMinutos(a, b) {
+    var ma = minutosDelDia(a), mb = minutosDelDia(b);
+    if (ma < 0 || mb < 0) return 9999;
+    var d = Math.abs(ma - mb);
+    return Math.min(d, 1440 - d);
+  }
+
+  function deporteCompatible(a, b) { return a === b || a === "others" || b === "others"; }
+
+  /** Coinciden los DOS equipos (en cualquier orden): casi seguro el mismo partido. */
+  function coincidenAmbos(a, b) {
+    return (mismoEquipo(a.cmp1, b.cmp1) && mismoEquipo(a.cmp2, b.cmp2)) ||
+           (mismoEquipo(a.cmp1, b.cmp2) && mismoEquipo(a.cmp2, b.cmp1));
+  }
+
+  /**
+   * ¿Es el mismo partido? Dos reglas (verificadas contra listas reales):
+   *  - fuerte: coinciden los dos equipos → se acepta aunque las horas difieran hasta 90 min
+   *    (una fuente a veces tiene mal la hora: Radomiak–Wisla figuraba 16:15 en una y 16:45 en otra);
+   *  - débil: coincide uno solo → solo si empiezan a la misma hora (±10 min), porque dos partidos
+   *    distintos a la misma hora no comparten equipo.
+   */
+  function mismoPartido(a, b) {
+    if (!a.cmp2 || !b.cmp2 || !deporteCompatible(a.deporte, b.deporte)) return false;
+    var dif = difMinutos(a.hora, b.hora);
+    if (dif <= 90 && coincidenAmbos(a, b)) return true;
+    return dif <= 10 && (mismoEquipo(a.cmp1, b.cmp1) || mismoEquipo(a.cmp2, b.cmp2));
+  }
+
+  /** Une las dos listas y saca los repetidos (también los que vienen dos veces en la misma fuente). */
+  function combinar() {
+    var base = [];
+    principales.forEach(function (p) {
+      for (var i = 0; i < base.length; i++) {
+        // Repetido dentro de la fuente principal (ej. la misma pelea listada dos veces).
+        if (difMinutos(base[i].hora, p.hora) <= 10 && deporteCompatible(base[i].deporte, p.deporte) &&
+            base[i].cmp2 && p.cmp2 && coincidenAmbos(base[i], p)) return;
+      }
+      var c = {}; for (var k in p) c[k] = p[k]; c.vipHref = ""; c.vipHref2 = "";
+      base.push(c);
+    });
+
+    var extra = [];
+    vips.forEach(function (v) {
+      var par = null, i;
+      // Primero la regla fuerte en toda la lista; recién después la débil.
+      for (i = 0; i < base.length && !par; i++) {
+        if (!base[i].vipHref && base[i].cmp2 && v.cmp2 && deporteCompatible(base[i].deporte, v.deporte) &&
+            difMinutos(base[i].hora, v.hora) <= 90 && coincidenAmbos(base[i], v)) par = base[i];
+      }
+      for (i = 0; i < base.length && !par; i++) {
+        if (!base[i].vipHref && mismoPartido(base[i], v)) par = base[i];
+      }
+      // Eventos sin dos equipos (combate, golf…): se comparan por el nombre del evento.
+      for (i = 0; i < base.length && !par; i++) {
+        var b = base[i];
+        if (b.vipHref) continue;
+        if (!(DEPORTES_DE_EVENTO[b.deporte] || DEPORTES_DE_EVENTO[v.deporte] || !b.visita || !v.visita)) continue;
+        if (mismoEvento(b, v)) par = b;
+      }
+      // (VIPBox ya trae cada evento una sola vez: no se comparan entre sí. Probado: comparar
+      //  "Montana" con "Montana State" borraba partidos distintos.)
+      if (par) {
+        par.vipHref = v.href;
+        par.vipFuente = v.fuente;
+        if (!par.bandera && v.bandera) par.bandera = v.bandera;   // MadPlay77 sin bandera: la del país de VIPBox
+      } else {
+        // El mismo evento (sin dos equipos) por otro canal: "CME Group Tour Championship SKY" y "… CNBC".
+        // Puede estar ya en la lista principal (unido con el primer canal) o entre los de VIPBox.
+        var gemelo = null, g;
+        if (!v.visita) {
+          for (g = 0; g < base.length && !gemelo; g++) {
+            if (!base[g].visita && base[g].vipHref && !base[g].vipHref2 && mismoEvento(base[g], v)) gemelo = base[g];
+          }
+          for (g = 0; g < extra.length && !gemelo; g++) {
+            var e2 = extra[g];
+            if (!e2.visita && !e2.vipHref2 && e2.t === v.t && mismoEvento(e2, v)) gemelo = e2;
+          }
+        }
+        if (gemelo) {
+          if (!gemelo.vipHref) { gemelo.vipHref = v.href; gemelo.vipFuente = "Otro canal"; }
+          else { gemelo.vipHref2 = v.href; }
+        } else extra.push(v);
+      }
+    });
+    base.forEach(estimarEstado);
+    extra.forEach(aplicarMemoria);  // lo que quedó solo en VIPBox: a su liga, si se la conoce de MadPlay77
+    extra.forEach(estimarEstado);   // lo de VIPBox también: tarda en sacar lo que ya terminó
+    partidos = base.concat(extra);
+  }
+
+  // ---------------------------------------------------------------- dibujo
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt != null) e.textContent = txt;
+    return e;
+  }
+
+  function dibujarDeportes() {
+    var cont = document.getElementById("deportes");
+    var focoAntes = document.activeElement && document.activeElement.dataset.key;
+    cont.innerHTML = "";
+    var cuenta = {};
+    partidos.forEach(function (x) { cuenta[x.deporte] = (cuenta[x.deporte] || 0) + 1; });
+    var ordenados = Object.keys(cuenta).sort(function (a, b) { return cuenta[b] - cuenta[a]; });
+    // Fútbol siempre primero (es lo que más se mira); el resto, por cantidad de partidos.
+    if (cuenta.football) ordenados = ["football"].concat(ordenados.filter(function (d) { return d !== "football"; }));
+    ORDEN_DEPORTES = {};
+    ordenados.forEach(function (d, i) { ORDEN_DEPORTES[d] = i; });
+    var lista = [""].concat(ordenados);
+    lista.forEach(function (d) {
+      var b = el("button", "f" + (filtro.deporte === d ? " on" : ""),
+        d ? (DEPORTES[d] || titulo(d)) + " " + cuenta[d] : "Todos " + partidos.length);
+      b.dataset.key = "dep:" + d;
+      b.onclick = function () { filtro.deporte = d; guardarLS("filtro", filtro); dibujar(); };
+      cont.appendChild(b);
+    });
+    if (filtro.deporte && !cuenta[filtro.deporte]) { filtro.deporte = ""; }
+    return focoAntes;
+  }
+
+  function imagen(src, cls) {
+    var i = document.createElement("img");
+    i.className = cls;
+    i.loading = "lazy";          // solo se bajan los escudos que aparecen en pantalla
+    i.decoding = "async";
+    i.alt = "";
+    i.referrerPolicy = "no-referrer";
+    i.onerror = function () { i.style.visibility = "hidden"; };
+    i.src = src;
+    return i;
+  }
+
+  function equipo(nombre, logo, local) {
+    var d = el("div", "equipo " + (local ? "local" : "visita"));
+    var s = el("span", null, nombre);
+    if (local) d.appendChild(s);
+    if (logo) d.appendChild(imagen(logo, "escudo"));
+    if (!local) d.appendChild(s);
+    return d;
+  }
+
+  /** "en 25 min", "en 2 h 10 min"; vacío si ya empezó o falta mucho. */
+  function cuentaRegresiva(t) {
+    var faltan = Math.round((t - Date.now()) / 60000);
+    if (faltan <= 0 || faltan > 12 * 60) return "";
+    if (faltan < 60) return "en " + faltan + " min";
+    return "en " + Math.floor(faltan / 60) + " h" + (faltan % 60 ? " " + (faltan % 60) + " min" : "");
+  }
+
+  function filaPartido(x) {
+    var fila = el("div", "fila-p");
+    var b = el("button", "f partido");
+    b.dataset.key = "p:" + x.id;
+    var h = el("div", "hora", x.hora || (x.canal ? "24 h" : ""));
+    if (x.min) h.appendChild(el("span", "min", x.terminado ? "Final" : (x.min === "HT" ? "Entretiempo" : x.min + "'")));
+    else if ((x.soloVip || x.estimado) && x.vivo && !x.canal) h.appendChild(el("span", "min", "En vivo"));
+    else if (x.estimado && x.terminado) h.appendChild(el("span", "fin", "Terminado"));
+    else if (!x.vivo && !x.terminado && x.t) {
+      var c = el("span", "cuenta", cuentaRegresiva(x.t));
+      c.dataset.t = x.t;
+      h.appendChild(c);
+    }
+    b.appendChild(h);
+    if (x.visita) {
+      b.appendChild(equipo(x.local, x.logo1, true));
+      var r = x.goles.length === 2 ? el("div", "res", x.goles[0] + " - " + x.goles[1]) : el("div", "res nada", "vs");
+      b.appendChild(r);
+      b.appendChild(equipo(x.visita, x.logo2, false));
+    } else {
+      b.classList.add("solo");
+      b.appendChild(el("div", "local", x.local || x.liga));
+    }
+    b.onclick = function () { if (window.Android) Android.abrir(x.href); };
+    fila.appendChild(b);
+    if (x.vipHref) {
+      // El mismo partido también está en VIPBox: segundo botón, a la derecha (flecha →).
+      var alt = el("button", "f alt", (x.vipFuente || "VIPBox") + " ›");
+      alt.dataset.key = "alt:" + x.id;
+      alt.onclick = function () { if (window.Android) Android.abrir(x.vipHref); };
+      fila.appendChild(alt);
+    }
+    if (x.vipHref2) {
+      var alt2 = el("button", "f alt", "Otro canal ›");
+      alt2.dataset.key = "alt2:" + x.id;
+      alt2.onclick = function () { if (window.Android) Android.abrir(x.vipHref2); };
+      fila.appendChild(alt2);
+    }
+    return fila;
+  }
+
+  function seccion(main, tituloSec, claseSec, items) {
+    if (!items.length) return;
+    main.appendChild(el("h2", claseSec, tituloSec + " · " + items.length));
+    // Agrupa por liga; las favoritas primero, el resto en el orden en que vienen (por hora).
+    var grupos = [], porClave = {};
+    items.forEach(function (x) {
+      if (!porClave[x.claveLiga]) { porClave[x.claveLiga] = { liga: x.liga, clave: x.claveLiga, bandera: x.bandera, items: [] }; grupos.push(porClave[x.claveLiga]); }
+      porClave[x.claveLiga].items.push(x);
+      if (!porClave[x.claveLiga].bandera && x.bandera) porClave[x.claveLiga].bandera = x.bandera;
+    });
+    // Favoritas primero; después, en el orden de los deportes de arriba (fútbol primero); dentro de cada
+    // deporte, como vienen (por hora). sort() es estable, así que se respeta el orden original.
+    grupos.forEach(function (g, i) { g.pos = i; g.dep = g.items[0].deporte; });
+    grupos.sort(function (a, b) {
+      var f = (favs[b.clave] ? 1 : 0) - (favs[a.clave] ? 1 : 0);
+      if (f) return f;
+      var da = ORDEN_DEPORTES[a.dep], db = ORDEN_DEPORTES[b.dep];
+      if (da !== db) return (da === undefined ? 99 : da) - (db === undefined ? 99 : db);
+      return a.pos - b.pos;
+    });
+    grupos.forEach(function (g) {
+      var cab = el("div", "liga");
+      var estrella = el("button", "f" + (favs[g.clave] ? " fav" : ""), favs[g.clave] ? "★" : "☆");
+      estrella.dataset.key = "fav:" + claseSec + ":" + g.clave;
+      estrella.onclick = function () {
+        if (favs[g.clave]) delete favs[g.clave]; else favs[g.clave] = true;
+        guardarLS("favs", favs); dibujar();
+      };
+      cab.appendChild(estrella);
+      if (g.bandera) cab.appendChild(imagen(g.bandera, "bandera"));
+      cab.appendChild(el("span", "nombre", g.liga));
+      var grupo = el("div", "grupo");
+      grupo.appendChild(cab);
+      g.items.forEach(function (x) { grupo.appendChild(filaPartido(x)); });
+      main.appendChild(grupo);
+    });
+  }
+
+  var firmaAnterior = "";
+
+  function dibujar() {
+    // Si nada cambió (misma lista, mismos filtros y favoritos), no se rearma la pantalla.
+    combinar();
+    var firma = JSON.stringify([partidos, filtro, favs]);
+    if (firma === firmaAnterior) return;
+    firmaAnterior = firma;
+
+    var focoAntes = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.key : null;
+    // Posición del cursor en la lista: si ese partido desaparece al actualizar, se queda en el de al lado.
+    var enListaAntes = Array.prototype.slice.call(document.querySelectorAll("#lista .f:not(.alt)"));
+    indiceFocoAntes = enListaAntes.indexOf(document.activeElement);
+    dibujarDeportes();
+
+    document.getElementById("bVivo").classList.toggle("on", filtro.soloVivo);
+    document.getElementById("bFav").classList.toggle("on", filtro.soloFav);
+
+    var visibles = partidos.filter(function (x) {
+      if (filtro.deporte && x.deporte !== filtro.deporte) return false;
+      if (filtro.soloVivo && !x.vivo) return false;
+      if (filtro.soloFav && !favs[x.claveLiga]) return false;
+      return true;
+    });
+
+    var main = document.getElementById("lista");
+    main.innerHTML = "";
+    if (!partidos.length) { return restaurarFoco(focoAntes); }
+    if (!visibles.length) {
+      main.appendChild(el("div", "vacio", filtro.soloFav ? "No hay partidos de tus ligas favoritas. Marcalas con ☆." : "No hay partidos con este filtro."));
+      return restaurarFoco(focoAntes);
+    }
+    var finDeHoy = new Date(); finDeHoy.setHours(23, 59, 59, 999);
+    var porHora = function (a, b) { return (a.t || 0) - (b.t || 0); };
+    var proximos = visibles.filter(function (x) { return !x.vivo && !x.terminado && !x.canal; }).sort(porHora);
+    seccion(main, "En vivo", "vivo", visibles.filter(function (x) { return x.vivo && !x.canal; }));
+    seccion(main, "Próximos · hoy", "prox", proximos.filter(function (x) { return !x.t || x.t <= finDeHoy.getTime(); }));
+    seccion(main, "Mañana", "man", proximos.filter(function (x) { return x.t && x.t > finDeHoy.getTime(); }));
+    seccion(main, "Canales 24 h", "canal", visibles.filter(function (x) { return x.canal; }));
+    // Terminados: lo último que terminó, arriba.
+    seccion(main, "Terminados", "fin", visibles.filter(function (x) { return x.terminado; })
+      .sort(function (a, b) { return (b.t || 0) - (a.t || 0); }));
+    restaurarFoco(focoAntes);
+  }
+
+  // La cuenta regresiva se actualiza sola, tocando solo esos textos (sin rearmar la lista).
+  setInterval(function () {
+    var cs = document.querySelectorAll(".cuenta[data-t]");
+    for (var i = 0; i < cs.length; i++) cs[i].textContent = cuentaRegresiva(+cs[i].dataset.t);
+  }, 30000);
+
+  var indiceFocoAntes = -1;
+  var ORDEN_DEPORTES = {};    // deporte -> posición en la fila de botones (fútbol primero)
+  var usuarioMovio = false;   // hasta la primera tecla, el cursor se ubica solo en el primer partido
+
+  function restaurarFoco(clave) {
+    var objetivo = clave ? document.querySelector('[data-key="' + (window.CSS && CSS.escape ? CSS.escape(clave) : clave) + '"]') : null;
+    var enLista = Array.prototype.slice.call(document.querySelectorAll("#lista .f:not(.alt)"));
+    if (!objetivo && indiceFocoAntes >= 0 && enLista.length) {
+      // El partido donde estaba el cursor ya no está (terminó): el que quedó en su lugar, sin saltar.
+      objetivo = enLista[Math.min(indiceFocoAntes, enLista.length - 1)];
+    }
+    if (!objetivo && !usuarioMovio) objetivo = document.querySelector("#lista .partido");
+    if (!objetivo) objetivo = document.getElementById("bVivo");
+    var sinFoco = !document.activeElement || document.activeElement === document.body;
+    if (objetivo && (sinFoco || clave || !usuarioMovio)) {
+      objetivo.focus({ preventScroll: true });
+      if (!usuarioMovio) window.scrollTo(0, 0);
+    }
+  }
+
+  // ---------------------------------------------------------------- navegación con el control
+  function enfocar(e, arriba) {
+    e.focus({ preventScroll: true });
+    if (arriba && !e.closest("#lista")) window.scrollTo(0, 0);
+    else e.scrollIntoView({ block: "center" });
+  }
+
+  function mover(dir) {
+    var actual = document.activeElement;
+
+    // Dentro de la lista el orden es lineal (estrella, partido, partido, estrella…):
+    // arriba/abajo = anterior/siguiente, sin medir toda la pantalla en cada tecla.
+    if (actual && actual.closest && actual.closest("#lista")) {
+      // El botón «VIPBox ›» queda fuera del orden vertical: se llega con → y se vuelve con ←.
+      if (actual.classList.contains("alt")) {
+        var suFila = actual.parentElement.querySelector(".partido");
+        var prevAlt = actual.previousElementSibling, nextAlt = actual.nextElementSibling;
+        if (dir === "l") { enfocar(prevAlt && prevAlt.classList.contains("alt") ? prevAlt : suFila); return; }
+        if (dir === "r") { if (nextAlt && nextAlt.classList.contains("alt")) enfocar(nextAlt); return; }
+        actual = suFila;
+      } else if (dir === "r" && actual.classList.contains("partido")) {
+        var alt = actual.parentElement.querySelector(".alt");
+        if (alt) enfocar(alt);
+        return;
+      }
+      var enLista = Array.prototype.slice.call(document.querySelectorAll("#lista .f:not(.alt)"));
+      var i = enLista.indexOf(actual);
+      if (dir === "d" && i < enLista.length - 1) { enfocar(enLista[i + 1]); return; }
+      if (dir === "d") return;
+      if (dir === "u" && i > 0) { enfocar(enLista[i - 1]); return; }
+      if (dir === "l" && actual.classList.contains("partido")) {
+        for (var j = i - 1; j >= 0; j--) if (!enLista[j].classList.contains("partido")) { enfocar(enLista[j]); return; }
+        return;
+      }
+      if (dir === "r" && !actual.classList.contains("partido") && enLista[i + 1]) { enfocar(enLista[i + 1]); return; }
+      if (dir !== "u") return;
+      // arriba desde el primero de la lista: sigue la búsqueda geométrica hacia los filtros
+    }
+
+    if (actual && actual.closest && actual.closest("#lista")) {
+      // desde el principio de la lista hacia arriba: al deporte elegido
+      var dep = document.querySelector("#deportes .f.on") || document.querySelector("#deportes .f");
+      if (dep) enfocar(dep, true);
+      return;
+    }
+    // Zona de botones y deportes (pocos elementos): búsqueda geométrica.
+    var todos = Array.prototype.slice.call(document.querySelectorAll("header .f, #deportes .f"));
+    if (!actual || todos.indexOf(actual) < 0) { if (todos[0]) todos[0].focus(); return; }
+    var r = actual.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    var mejor = null, mejorD = Infinity;
+    todos.forEach(function (e) {
+      if (e === actual) return;
+      var q = e.getBoundingClientRect();
+      if (!q.width) return;
+      var x = q.left + q.width / 2, y = q.top + q.height / 2, dx = x - cx, dy = y - cy;
+      var vertical = dir === "u" || dir === "d";
+      if (dir === "u" && q.bottom > r.top + 2) return;
+      if (dir === "d" && q.top < r.bottom - 2) return;
+      if (dir === "l" && (dx > -5 || Math.abs(dy) > r.height)) return;
+      if (dir === "r" && (dx < 5 || Math.abs(dy) > r.height)) return;
+      // Distancia entre bordes (no centros): las filas son anchas y las estrellas chicas.
+      var gapX = Math.max(0, q.left - r.right, r.left - q.right);
+      var gapY = Math.max(0, q.top - r.bottom, r.top - q.bottom);
+      var d = vertical ? gapY * 10 + gapX + Math.abs(dx) * 0.01 : gapX * 10 + gapY * 3 + Math.abs(dy);
+      if (d < mejorD) { mejorD = d; mejor = e; }
+    });
+    if (mejor) {
+      enfocar(mejor, true);
+    } else if (dir === "d") {
+      var primero = document.querySelector("#lista .f");
+      if (primero) enfocar(primero);
+    }
+  }
+
+  document.addEventListener("keydown", function (e) {
+    usuarioMovio = true;
+    var dir = { ArrowUp: "u", ArrowDown: "d", ArrowLeft: "l", ArrowRight: "r" }[e.key];
+    if (dir) { e.preventDefault(); mover(dir); return; }
+    if (e.key === "Enter" || e.keyCode === 13 || e.keyCode === 23) {
+      var a = document.activeElement;
+      if (a && a.classList.contains("f")) { e.preventDefault(); a.click(); }
+    }
+  });
+
+  // ---------------------------------------------------------------- botones de arriba
+  document.getElementById("bVivo").onclick = function () { filtro.soloVivo = !filtro.soloVivo; guardarLS("filtro", filtro); dibujar(); };
+  document.getElementById("bFav").onclick = function () { filtro.soloFav = !filtro.soloFav; guardarLS("filtro", filtro); dibujar(); };
+  document.getElementById("bAct").onclick = function () { if (window.Android) Android.actualizar(); };
+  document.getElementById("bFuente").onclick = function () {
+    if (!sitios.length || !window.Android) return;
+    Android.elegirSitio((sitioActual + 1) % sitios.length);
+  };
+
+  // ---------------------------------------------------------------- API que llama Java
+  var mostrandoGuardada = false;
+  var ultimoVip = null;
+
+  window.app = {
+    setData: function (json, guardada) {
+      var o;
+      try { o = typeof json === "string" ? JSON.parse(json) : json; } catch (e) { return; }
+      if (!guardada) {
+        mostrandoGuardada = false;
+        // Se guarda para mostrarla al instante la próxima vez que se abra la app.
+        try { localStorage.setItem("ultima", JSON.stringify({ t: Date.now(), o: o })); } catch (e) {}
+      }
+      var vistos = {};
+      principales = (o.items || []).map(interpretar).filter(function (x) {
+        if (!x || vistos[x.id]) return false;
+        vistos[x.id] = true; return true;
+      });
+      validarSenalEnVivo(principales);
+      if (!guardada) recordarEquipos(principales);
+      dibujar();
+    },
+    setMapa: function (json) {
+      var m;
+      try { m = typeof json === "string" ? JSON.parse(json) : json; } catch (e) { return; }
+      if (!m || typeof m !== "object") return;
+      MAPA_LIGAS = m;
+      guardarLS("mapaLigas", m);
+      if (ultimoVip) app.setVip(ultimoVip, true);   // se vuelven a ubicar los eventos que ya están
+    },
+    setVip: function (json, guardada) {
+      var o;
+      try { o = typeof json === "string" ? JSON.parse(json) : json; } catch (e) { return; }
+      ultimoVip = o;
+      if (!guardada) {
+        try { localStorage.setItem("ultimaVip", JSON.stringify({ t: Date.now(), o: o })); } catch (e) {}
+      }
+      var vistos = {};
+      vips = (o.items || []).map(interpretarVip).filter(function (x) {
+        if (!x || vistos[x.id]) return false;
+        vistos[x.id] = true; return true;
+      });
+      dibujar();
+    },
+    setStatus: function (t) {
+      // Mientras se ve la lista guardada, el "Cargando…" se reemplaza por un aviso más claro.
+      if (mostrandoGuardada && /^Cargando/.test(t || "")) t = "Lista guardada · actualizando…";
+      // "!Sitio" = el sitio no respondió (sin internet, caído…).
+      if (t && t.charAt(0) === "!") {
+        var sitio = t.slice(1);
+        t = principales.length
+          ? sitio + " no respondió · se ve la última lista"
+          : "No se pudo cargar " + sitio + ". Probá «Actualizar» o cambiá de fuente.";
+      }
+      document.getElementById("estado").textContent = t || "";
+    },
+    setSites: function (lista, actual) {
+      sitios = lista || []; sitioActual = actual || 0;
+      document.getElementById("bFuente").textContent = "Fuente: " + (sitios[sitioActual] || "?");
+    },
+    clear: function () { principales = []; dibujar(); },
+    // Diagnóstico (solo lectura): ver cómo quedaron unidas las listas.
+    _estado: function () { combinar(); return { principales: principales, vips: vips, partidos: partidos }; }
+  };
+
+  // Listas guardadas de la vez anterior (si tienen menos de 6 horas): se muestran al instante.
+  var ultima = leerLS("ultima", null), ultimaVip = leerLS("ultimaVip", null);
+  var reciente = function (u) { return u && u.o && Date.now() - u.t < 6 * 3600 * 1000; };
+  if (reciente(ultimaVip)) {
+    try { ultimoVip = ultimaVip.o; vips = (ultimaVip.o.items || []).map(interpretarVip).filter(Boolean); } catch (e) { vips = []; }
+  }
+  if (reciente(ultima)) {
+    mostrandoGuardada = true;
+    app.setData(ultima.o, true);
+    app.setStatus("Lista guardada · actualizando…");
+  } else {
+    dibujar();
+  }
+  // Al abrir, el cursor arranca en el primer partido (si todavía no hay lista, en «Solo en vivo»).
+  restaurarFoco(null);
+})();
+</script>
+</body>
+</html>

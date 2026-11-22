@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Clave de firma propia, respaldada en OneDrive (ver OneDrive\Documentos\partidos-tv-firma\LEEME.txt).
+// Es la MISMA clave con la que se instaló la app por primera vez: si se firmara con otra,
+// Android obligaría a desinstalar (y se perderían favoritos, filtros y listas guardadas).
+// Si la carpeta no está (otra PC sin OneDrive), se usa la clave de debug de esa PC y se avisa.
+def claveOneDrive = new File(System.getenv('USERPROFILE') ?: '', 'OneDrive/Documentos/partidos-tv-firma/partidos-tv.keystore')
+
+android {
+    namespace 'ar.partidostv'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'ar.partidostv'
+        minSdk 21
+        targetSdk 35
+        versionCode 16
+        versionName '16.0'
+    }
+
+    signingConfigs {
+        propia {
+            storeFile claveOneDrive
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            if (claveOneDrive.exists()) {
+                signingConfig signingConfigs.propia
+            } else {
+                println "AVISO: no está ${claveOneDrive}; se firma con la clave de debug de esta PC " +
+                        "(la tele va a pedir desinstalar para actualizar)."
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

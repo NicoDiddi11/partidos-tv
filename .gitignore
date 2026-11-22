@@ -1,0 +1,18 @@
+# Compilación
+build/
+app/build/
+.gradle/
+*.apk
+*.aab
+
+# Configuración local de esta PC (ruta del SDK)
+local.properties
+
+# Claves de firma: viven en OneDrive\Documentos\partidos-tv-firma, nunca en el repositorio
+*.keystore
+*.jks
+
+# Herramientas
+.claude/
+.idea/
+*.iml
