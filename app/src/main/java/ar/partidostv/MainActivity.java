@@ -62,6 +62,25 @@ public class MainActivity extends Activity {
             {"VIPRow", "https://www.viprow.lc/sports-live-now"},
     };
 
+    /**
+     * Grupo «Argentina»: agendas de sitios argentinos, en orden de importancia (manda el primero al unir).
+     * El NOMBRE dice cómo se lee cada uno (no cambiarlo); la dirección sí se puede cambiar desde el gist.
+     * AngulismoTV2 es la misma página en otro dominio: se usa solo si la primera no responde.
+     */
+    static final String[][] ARG_FABRICA = {
+            {"TVLibre", "https://tvlibre.st/agenda/"},
+            {"DeportesTVHD", "https://deportestvhd.me/"},
+            {"AngulismoTV", "https://angulismotv.pages.dev/transmision/"},
+            {"AngulismoTV2", "https://99fcafcf.angulismotv.pages.dev/transmision"},
+            {"NowFutx", "https://nowfutx.xyz/vivo/"},
+    };
+    /** De donde AngulismoTV (y NowFutx, para su agenda) sacan los partidos. Se cambia con «argentina AngulismoDatos = …». */
+    static final String DATOS_ANGULISMO =
+            "https://raw.githubusercontent.com/tadeoallende/repos-web/refs/heads/main/datos.json";
+    String[][] sitiosArg = ARG_FABRICA;
+    /** Qué grupo se está mirando: false = Internacional (MadPlay77 + VIPBox), true = Argentina. */
+    boolean modoArgentina;
+
     /** Fuente principal (resultados, minuto, escudos), en orden de preferencia. El usuario elige con «Fuente». */
     String[][] sitios = SITIOS_FABRICA;
     /** Fuente complementaria (más deportes, hora exacta, segundo link). Si la primera falla, se usa la siguiente. */
@@ -173,7 +192,8 @@ public class MainActivity extends Activity {
         // Última lista de direcciones que se leyó del gist (si nunca se pudo, quedan las de fábrica).
         String[][][] guardada = interpretarConfig(prefs.getString("config", ""));
         if (guardada != null) aplicarConfig(guardada);
-        else aplicarConfig(new String[][][]{SITIOS_FABRICA, VIP_FABRICA});
+        else aplicarConfig(new String[][][]{SITIOS_FABRICA, VIP_FABRICA, ARG_FABRICA});
+        modoArgentina = "argentina".equals(prefs.getString("grupo", ""));
         sitio = Math.min(prefs.getInt("sitio", 0), sitios.length - 1);
         sitioVip = Math.min(prefs.getInt("sitioVip", 0), sitiosVip.length - 1);
         // Para pruebas por adb: am start ... --ei sitio 1 --ei sitioVip 1 (fuerza una fuente sin guardarla)
@@ -182,6 +202,12 @@ public class MainActivity extends Activity {
             sitio = Math.max(0, Math.min(arranque.getIntExtra("sitio", sitio), sitios.length - 1));
             sitioVip = Math.max(0, Math.min(arranque.getIntExtra("sitioVip", sitioVip), sitiosVip.length - 1));
             volcar = arranque.getBooleanExtra("volcar", false);
+            // Pruebas por adb: --es grupo argentina (abre en ese grupo, como si lo hubieras elegido)
+            String g = arranque.getStringExtra("grupo");
+            if (g != null) {
+                modoArgentina = "argentina".equals(g);
+                prefs.edit().putString("grupo", modoArgentina ? "argentina" : "internacional").apply();
+            }
             String[][][] prueba = interpretarConfig(arranque.getStringExtra("configPrueba"));
             if (prueba != null) {
                 configDePrueba = true;
@@ -267,9 +293,20 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 uiLista = true;
+                ui.evaluateJavascript("app.setGrupo('" + (modoArgentina ? "argentina" : "internacional") + "')", null);
                 enviarSitios();
                 enviarCanales();        // los canales 24 h guardados se ven desde el primer momento
-                estado("Cargando " + sitios[sitio][0] + "…");
+                if (recargarAlCargarUi) {
+                    recargarAlCargarUi = false;
+                    Log.i("PartidosTV", "la lectura del arranque se cortó con una pausa: se repite");
+                    cargarSitio();
+                }
+                if (argentinaPendiente != null) {
+                    ui.evaluateJavascript("app.setArgentina(" + JSONObject.quote(argentinaPendiente) + ")", null);
+                    argentinaPendiente = null;
+                    return;
+                }
+                estado(modoArgentina ? "Cargando Argentina…" : "Cargando " + sitios[sitio][0] + "…");
             }
         });
         raiz.addView(ui, new FrameLayout.LayoutParams(
@@ -290,24 +327,29 @@ public class MainActivity extends Activity {
 
     /**
      * Formato (una por línea, # = comentario):  principal MadPlay77 = https://…   /   vip VIPBox = https://…
-     * Devuelve {principales, vips} o null si el texto no sirve (así un error al editar no rompe nada).
+     *   /   argentina TVLibre = https://…
+     * Devuelve {principales, vips, argentinas} o null si el texto no sirve (así un error al editar no rompe
+     * nada). Si no trae ninguna «argentina», ese grupo usa las de fábrica.
      */
     static String[][][] interpretarConfig(String txt) {
         if (txt == null || txt.isEmpty()) return null;
-        java.util.List<String[]> pr = new java.util.ArrayList<>(), vp = new java.util.ArrayList<>();
+        java.util.List<String[]> pr = new java.util.ArrayList<>(), vp = new java.util.ArrayList<>(),
+                ar = new java.util.ArrayList<>();
         java.util.regex.Pattern linea = java.util.regex.Pattern.compile(
-                "^\\s*(principal|vip)\\s+(\\S+)\\s*=\\s*(https://[^\\s/]+\\.[^\\s/]+\\S*)\\s*$",
+                "^\\s*(principal|vip|argentina)\\s+(\\S+)\\s*=\\s*(https://[^\\s/]+\\.[^\\s/]+\\S*)\\s*$",
                 java.util.regex.Pattern.CASE_INSENSITIVE);
         for (String l : txt.split("\\r?\\n")) {
             if (l.trim().isEmpty() || l.trim().startsWith("#")) continue;
             java.util.regex.Matcher m = linea.matcher(l);
             if (!m.matches()) continue;
             String[] s = {m.group(2), m.group(3)};
-            if ("principal".equalsIgnoreCase(m.group(1))) pr.add(s); else vp.add(s);
-            if (pr.size() + vp.size() > 20) break;
+            String tipo = m.group(1).toLowerCase(Locale.ROOT);
+            if (tipo.equals("principal")) pr.add(s); else if (tipo.equals("vip")) vp.add(s); else ar.add(s);
+            if (pr.size() + vp.size() + ar.size() > 30) break;
         }
         if (pr.isEmpty()) return null;   // sin fuente principal no hay app
-        return new String[][][]{pr.toArray(new String[0][]), vp.toArray(new String[0][])};
+        return new String[][][]{pr.toArray(new String[0][]), vp.toArray(new String[0][]),
+                ar.isEmpty() ? ARG_FABRICA : ar.toArray(new String[0][])};
     }
 
     /** Aplica una lista, reemplazando cada dirección por la que se aprendió de una redirección, si hay. */
@@ -320,6 +362,7 @@ public class MainActivity extends Activity {
         configBase = cfg;
         sitios = conAprendidas(cfg[0]);
         sitiosVip = conAprendidas(cfg[1]);
+        sitiosArg = conAprendidas(cfg.length > 2 ? cfg[2] : ARG_FABRICA);
         sitio = Math.max(0, Math.min(sitio, sitios.length - 1));
         sitioVip = Math.max(0, Math.min(sitioVip, Math.max(0, sitiosVip.length - 1)));
     }
@@ -386,8 +429,9 @@ public class MainActivity extends Activity {
         String h = destino.getHost().toLowerCase(Locale.ROOT);
         // Dominio al que se está probando la mudanza (con o sin "www.").
         if (hostCandidato != null && dominioBase(h).equals(dominioBase(hostCandidato.toLowerCase(Locale.ROOT)))) return true;
-        for (String[][] grupo : new String[][][]{sitios, sitiosVip}) {
+        for (String[][] grupo : new String[][][]{sitios, sitiosVip, sitiosArg}) {
             for (String[] s : grupo) {
+                if (s[0].endsWith("Datos")) continue;    // de ahí solo se leen datos, nunca se abre nada
                 String base = dominioBase(Uri.parse(s[1]).getHost());
                 if (h.equals(base) || h.endsWith("." + base)) return true;
             }
@@ -404,11 +448,21 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    /** "jack11eo.mpaver6fuiwild.my" -> "mpaver6fuiwild.my" */
+    /**
+     * "jack11eo.mpaver6fuiwild.my" -> "mpaver6fuiwild.my". En los alojamientos gratuitos (pages.dev…) cada
+     * sitio es un subdominio: "99fcafcf.angulismotv.pages.dev" -> "angulismotv.pages.dev", así permitir
+     * AngulismoTV no permite cualquier otra página de pages.dev.
+     */
+    static final String[] ALOJAMIENTOS = {"pages.dev", "workers.dev", "github.io", "netlify.app", "vercel.app", "web.app"};
+
     static String dominioBase(String host) {
         String[] p = host.split("\\.");
         if (p.length <= 2) return host;
-        return p[p.length - 2] + "." + p[p.length - 1];
+        String dos = p[p.length - 2] + "." + p[p.length - 1];
+        for (String a : ALOJAMIENTOS) {
+            if (a.equals(dos)) return p[p.length - 3] + "." + dos;
+        }
+        return dos;
     }
 
     // ------------------------------------------------------------------ lectura de los sitios
@@ -416,6 +470,15 @@ public class MainActivity extends Activity {
     /** Arranca una actualización completa: primero la fuente principal, después VIPBox. */
     void cargarSitio() {
         probeOtroVip = false;
+        if (modoArgentina) {
+            // Grupo Argentina: todo es texto (HTML/JSON), sin navegador oculto. Se descarga el lector por si
+            // estaba a mitad de leer MadPlay77 (cambiaste de grupo).
+            handler.removeCallbacksAndMessages(null);
+            turno++;
+            liberarLector();
+            leerArgentina(turno);
+            return;
+        }
         empezarFase(FASE_PRINCIPAL);
     }
 
@@ -718,6 +781,388 @@ public class MainActivity extends Activity {
         }, "vip").start();
     }
 
+    // ------------------------------------------------------------------ grupo Argentina, sin navegador
+    //
+    // Cada fuente se baja como texto y se pasa a un formato común:
+    //   {fuente, titulo: "Liga: Local vs. Visitante", clase: "AR"|"IT"|"NFL"…, t: instante (ms),
+    //    opciones: [{nombre: "ESPN", calidad: "720p", href}], logo1, logo2, logoLiga}
+    // La interfaz los une sin repetir (como hace con MadPlay77 + VIPBox).
+
+    static final java.util.TimeZone TZ_AR = java.util.TimeZone.getTimeZone("America/Argentina/Buenos_Aires");
+    /** DeportesTVHD escribe las horas en UTC+1 fijo (su página resta «60 − huso» para mostrarlas). */
+    static final java.util.TimeZone TZ_DTV = java.util.TimeZone.getTimeZone("GMT+01:00");
+    static final String[] MESES = {"enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+            "septiembre", "octubre", "noviembre", "diciembre"};
+
+    /** TVLibre: <li class="IT"><a href="#">Serie A: Juventus vs. Venezia <span class="t">08:30</span></a><ul>…opciones…</ul> */
+    static final java.util.regex.Pattern P_TVL_EVENTO = java.util.regex.Pattern.compile(
+            "<li class=\"([A-Za-z0-9_-]+)\">\\s*<a href=\"#\">(.*?)<span class=\"t\">\\s*(\\d{1,2}:\\d{2})\\s*</span>\\s*</a>\\s*<ul>(.*?)</ul>",
+            java.util.regex.Pattern.DOTALL);
+    static final java.util.regex.Pattern P_TVL_OPCION = java.util.regex.Pattern.compile(
+            "<a href=\"([^\"]+)\"[^>]*>([^<]*)(?:<span>([^<]*)</span>)?", java.util.regex.Pattern.DOTALL);
+    /** Encabezado «Agenda - Domingo 22 de Noviembre de 2026». */
+    static final java.util.regex.Pattern P_FECHA_AGENDA = java.util.regex.Pattern.compile(
+            "(\\d{1,2}) de ([A-Za-z]+) de (\\d{4})");
+    static final java.util.regex.Pattern P_HHMM = java.util.regex.Pattern.compile("^(\\d{1,2}):(\\d{2})");
+    static final java.util.regex.Pattern P_FECHA_HORA = java.util.regex.Pattern.compile(
+            "^(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{2}):(\\d{2})");
+    /** Opciones que piden una extensión del navegador de PC: en la tele no andan. */
+    static final java.util.regex.Pattern P_EXTENSION = java.util.regex.Pattern.compile(
+            "extensi[oó]n|extension", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    static String sinEtiquetas(String s) {
+        return sinEntidades((s == null ? "" : s).replaceAll("<[^>]*>", " ")).replaceAll("\\s+", " ").trim();
+    }
+
+    /** Link de una opción: relativo al sitio ("/eventos/?r=…") o del mismo sitio. Otro dominio: no se usa. */
+    static String absoluta(String base, String href) {
+        if (href == null || href.isEmpty() || href.startsWith("#") || href.startsWith("//")) return null;
+        if (href.startsWith("/")) return base + href;
+        if (href.startsWith(base + "/")) return href;
+        return null;
+    }
+
+    static JSONObject opcion(String nombre, String calidad, String href) throws Exception {
+        return new JSONObject().put("nombre", nombre).put("calidad", calidad == null ? "" : calidad).put("href", href);
+    }
+
+    static java.util.Calendar hoyEn(java.util.TimeZone tz, int masDias) {
+        java.util.Calendar c = java.util.Calendar.getInstance(tz);
+        c.add(java.util.Calendar.DAY_OF_MONTH, masDias);
+        return c;
+    }
+
+    /**
+     * Horas "HH:MM" de una agenda (en orden) -> instantes. La lista sigue después de medianoche: cuando la
+     * hora "vuelve atrás" más de 6 h (de 23:30 a 00:15) se pasa al día siguiente.
+     */
+    static long[] instantes(java.util.List<String> horas, java.util.Calendar fecha, java.util.TimeZone tz) {
+        long[] r = new long[horas.size()];
+        int previo = -1, dias = 0;
+        for (int i = 0; i < horas.size(); i++) {
+            java.util.regex.Matcher m = P_HHMM.matcher(horas.get(i).trim());
+            if (!m.find()) continue;
+            int h = Integer.parseInt(m.group(1)), mi = Integer.parseInt(m.group(2)), min = h * 60 + mi;
+            if (previo >= 0 && min < previo - 360) dias++;
+            previo = min;
+            java.util.Calendar c = java.util.Calendar.getInstance(tz);
+            c.clear();
+            c.set(fecha.get(java.util.Calendar.YEAR), fecha.get(java.util.Calendar.MONTH),
+                    fecha.get(java.util.Calendar.DAY_OF_MONTH) + dias, h, mi, 0);
+            r[i] = c.getTimeInMillis();
+        }
+        return r;
+    }
+
+    /**
+     * Agenda sin fecha: es la de hoy en la zona del sitio. Pero pasada la medianoche de esa zona (DeportesTVHD
+     * está 4 h adelantado: a las 21 de acá allá ya es mañana) el sitio sigue mostrando la de ayer: si la primera
+     * hora quedaría a más de 6 h en el futuro, la lista es de ayer.
+     */
+    static long[] instantesSinFecha(java.util.List<String> horas, java.util.TimeZone tz) {
+        long[] r = instantes(horas, hoyEn(tz, 0), tz);
+        long primero = 0;
+        for (long x : r) if (x > 0) { primero = x; break; }
+        if (primero > System.currentTimeMillis() + 6 * 3600_000L) r = instantes(horas, hoyEn(tz, -1), tz);
+        return r;
+    }
+
+    static java.util.Calendar fechaAgenda(String html) {
+        java.util.regex.Matcher m = P_FECHA_AGENDA.matcher(html);
+        if (!m.find()) return null;
+        String mes = m.group(2).toLowerCase(Locale.ROOT);
+        for (int i = 0; i < MESES.length; i++) {
+            if (MESES[i].equals(mes)) {
+                java.util.Calendar c = java.util.Calendar.getInstance(TZ_AR);
+                c.clear();
+                c.set(Integer.parseInt(m.group(3)), i, Integer.parseInt(m.group(1)));
+                // Si la fecha no es de ayer, hoy o mañana, el encabezado no es confiable: se ignora.
+                long dif = Math.abs(c.getTimeInMillis() - System.currentTimeMillis());
+                return dif < 2 * 24 * 3600_000L ? c : null;
+            }
+        }
+        return null;
+    }
+
+    /** TVLibre (/agenda/): HTML armado en el servidor, hora de Argentina, con la fecha en el encabezado. */
+    static java.util.List<JSONObject> eventosTvLibre(String base, String html, String fuente) throws Exception {
+        java.util.List<JSONObject> r = new java.util.ArrayList<>();
+        java.util.List<String> horas = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = P_TVL_EVENTO.matcher(html);
+        while (m.find()) {
+            JSONArray op = new JSONArray();
+            java.util.regex.Matcher mo = P_TVL_OPCION.matcher(m.group(4));
+            while (mo.find()) {
+                String href = absoluta(base, sinEntidades(mo.group(1)));
+                String nombre = sinEtiquetas(mo.group(2));
+                if (href == null || P_EXTENSION.matcher(nombre).find()) continue;
+                op.put(opcion(nombre, sinEtiquetas(mo.group(3)).replaceFirst("(?i)^calidad\\s*", ""), href));
+            }
+            JSONObject e = new JSONObject();
+            e.put("fuente", fuente);
+            e.put("clase", m.group(1));
+            e.put("titulo", sinEtiquetas(m.group(2)));
+            e.put("opciones", op);
+            r.add(e);
+            horas.add(m.group(3));
+        }
+        java.util.Calendar fecha = fechaAgenda(html);
+        long[] t = fecha != null ? instantes(horas, fecha, TZ_AR) : instantesSinFecha(horas, TZ_AR);
+        for (int i = 0; i < r.size(); i++) r.get(i).put("t", t[i]);
+        return r;
+    }
+
+    /** DeportesTVHD: los eventos están en /eventos.js (const EVENTOS_DATA = [ … ]), horas en UTC+1. */
+    static java.util.List<JSONObject> eventosDeportesTvHd(String base, String js, String fuente) throws Exception {
+        java.util.List<JSONObject> r = new java.util.ArrayList<>();
+        int i = js.indexOf('['), j = js.lastIndexOf(']');
+        if (i < 0 || j <= i) return r;
+        JSONArray a = new JSONArray(js.substring(i, j + 1));
+        java.util.List<String> horas = new java.util.ArrayList<>();
+        for (int k = 0; k < a.length(); k++) {
+            JSONObject x = a.optJSONObject(k);       // una coma de más al final deja un null: se saltea
+            if (x == null) continue;
+            JSONArray op = new JSONArray(), cs = x.optJSONArray("canales");
+            for (int c = 0; cs != null && c < cs.length(); c++) {
+                JSONObject ca = cs.optJSONObject(c);
+                if (ca == null) continue;
+                String href = absoluta(base, ca.optString("url")), nombre = ca.optString("nombre").trim();
+                if (href == null || P_EXTENSION.matcher(nombre).find()) continue;
+                op.put(opcion(nombre, ca.optString("calidad"), href));
+            }
+            JSONObject e = new JSONObject();
+            e.put("fuente", fuente);
+            e.put("clase", x.optString("clase"));
+            e.put("titulo", x.optString("titulo").trim());
+            e.put("opciones", op);
+            r.add(e);
+            horas.add(x.optString("hora"));
+        }
+        long[] t = instantesSinFecha(horas, TZ_DTV);
+        for (int k = 0; k < r.size(); k++) r.get(k).put("t", t[k]);
+        return r;
+    }
+
+    /**
+     * AngulismoTV: lista en JSON (fecha completa, hora de Argentina, escudos). Cada canal tiene varias
+     * «opciones» (señales); el link abre la página del sitio en ese canal, en la primera opción que no
+     * pide extensión de PC.
+     */
+    static java.util.List<JSONObject> eventosAngulismo(String transmision, String json, String fuente) throws Exception {
+        java.util.List<JSONObject> r = new java.util.ArrayList<>();
+        Object raiz = new JSONTokener(json).nextValue();
+        JSONArray evs = raiz instanceof JSONObject ? ((JSONObject) raiz).optJSONArray("events")
+                : raiz instanceof JSONArray ? (JSONArray) raiz : null;
+        if (evs == null) return r;
+        String sep = transmision.contains("?") ? "&" : "?";
+        for (int k = 0; k < evs.length(); k++) {
+            JSONObject x = evs.optJSONObject(k);
+            if (x == null) continue;
+            java.util.regex.Matcher mf = P_FECHA_HORA.matcher(x.optString("fecha"));
+            if (!mf.find()) continue;
+            java.util.Calendar c = java.util.Calendar.getInstance(TZ_AR);
+            c.clear();
+            c.set(Integer.parseInt(mf.group(1)), Integer.parseInt(mf.group(2)) - 1, Integer.parseInt(mf.group(3)),
+                    Integer.parseInt(mf.group(4)), Integer.parseInt(mf.group(5)), 0);
+            String id = x.optString("id");
+            JSONArray op = new JSONArray(), cs = x.optJSONArray("canales");
+            for (int ci = 0; cs != null && ci < cs.length(); ci++) {
+                JSONObject ca = cs.optJSONObject(ci);
+                if (ca == null) continue;
+                String nombre = ca.optString("name").trim();
+                JSONArray os = ca.optJSONArray("options");
+                int elegida = -1;
+                for (int o = 0; os != null && o < os.length() && elegida < 0; o++) {
+                    JSONObject oo = os.optJSONObject(o);
+                    if (oo != null && !P_EXTENSION.matcher(oo.optString("name")).find()) elegida = o;
+                }
+                if (nombre.isEmpty() || elegida < 0) continue;
+                String href = transmision + sep + "e=" + Uri.encode(id) + "&c=" + Uri.encode(nombre) + "&o=" + elegida;
+                op.put(opcion(nombre, "", href));
+            }
+            JSONObject e = new JSONObject();
+            e.put("fuente", fuente);
+            e.put("clase", "");
+            e.put("titulo", x.optString("evento").trim());
+            e.put("competencia", x.optString("competencia"));
+            e.put("t", c.getTimeInMillis());
+            e.put("logo1", x.optString("team1Logo"));
+            e.put("logo2", x.optString("team2Logo"));
+            e.put("logoLiga", x.optString("logoUrl"));
+            e.put("opciones", op);
+            r.add(e);
+        }
+        return r;
+    }
+
+    /**
+     * NowFutx: no tiene partidos sino un canal fijo, «Eventos (Principalmente Ascenso)», con varias señales
+     * que van cambiando según lo que se juegue. Se muestra como un canal: el link abre esa señal en su página.
+     */
+    static java.util.List<JSONObject> canalesNowFutx(String base, String json, String fuente) throws Exception {
+        java.util.List<JSONObject> r = new java.util.ArrayList<>();
+        JSONArray a = new JSONArray(json);
+        for (int k = 0; k < a.length(); k++) {
+            JSONObject x = a.optJSONObject(k);
+            if (x == null || !x.optString("name").toLowerCase(Locale.ROOT).contains("ascenso")) continue;
+            if (!x.optBoolean("show", true)) continue;
+            String nombre = x.optString("name");
+            JSONArray op = new JSONArray(), os = x.optJSONArray("options");
+            for (int o = 0; os != null && o < os.length(); o++) {
+                JSONObject oo = os.optJSONObject(o);
+                if (oo == null || P_EXTENSION.matcher(oo.optString("name")).find()) continue;
+                op.put(opcion(oo.optString("name"), "",
+                        base + "?c=" + java.net.URLEncoder.encode(nombre, "UTF-8") + "&o=" + o));
+            }
+            if (op.length() == 0) continue;
+            r.add(new JSONObject().put("fuente", fuente).put("titulo", nombre).put("canal", true)
+                    .put("clase", "AR").put("t", 0).put("opciones", op));
+        }
+        return r;
+    }
+
+    /** Lista argentina leída antes de que la interfaz terminara de cargar. */
+    String argentinaPendiente;
+
+    /** Primera dirección de la lista que responde (AngulismoTV y su copia en otro dominio). */
+    String angulismoVivo;
+
+    /**
+     * Lee todas las fuentes argentinas A LA VEZ y manda la lista a la interfaz con el orden de importancia
+     * (el del gist / de fábrica). Si una no responde, las otras igual aportan.
+     */
+    void leerArgentina(final int t) {
+        final String[][] lista = sitiosArg;
+        final long inicio = SystemClock.elapsedRealtime();
+        if (uiLista) estado("Cargando Argentina…");
+        Log.i("PartidosTV", "Argentina: leyendo " + lista.length + " direcciones (turno " + t + ")");
+        new Thread(() -> {
+            // Por nombre: cada sitio se lee a su manera. Las dos direcciones de AngulismoTV son una sola fuente.
+            String datosAng = DATOS_ANGULISMO;
+            java.util.List<String[]> angulismo = new java.util.ArrayList<>();
+            java.util.List<String[]> otras = new java.util.ArrayList<>();
+            for (String[] s : lista) {
+                String n = s[0].toLowerCase(Locale.ROOT);
+                if (n.equals("angulismodatos")) datosAng = s[1];
+                else if (n.startsWith("angulismo")) angulismo.add(s);
+                else otras.add(s);
+            }
+            java.util.List<String> orden = new java.util.ArrayList<>();
+            for (String[] s : lista) {
+                String n = s[0].toLowerCase(Locale.ROOT);
+                if (n.startsWith("angulismo") && !orden.contains("AngulismoTV") && !n.equals("angulismodatos")) orden.add("AngulismoTV");
+                else if (!n.startsWith("angulismo")) orden.add(s[0]);
+            }
+            final java.util.Map<String, java.util.List<JSONObject>> porFuente = new java.util.concurrent.ConcurrentHashMap<>();
+            final java.util.Map<String, String> notas = new java.util.concurrent.ConcurrentHashMap<>();
+            java.util.List<Thread> hilos = new java.util.ArrayList<>();
+            for (final String[] s : otras) {
+                Thread h = new Thread(() -> {
+                    String n = s[0].toLowerCase(Locale.ROOT);
+                    try {
+                        java.util.List<JSONObject> ev;
+                        if (n.startsWith("deportestv")) {
+                            Uri u = Uri.parse(s[1]);
+                            String base = u.getScheme() + "://" + u.getHost();
+                            // Su página pide /eventos.js?v=<hora> para no recibir una copia vieja: igual acá.
+                            ev = eventosDeportesTvHd(base, bajar(base + "/eventos.js?v=" + System.currentTimeMillis()), s[0]);
+                        } else if (n.startsWith("nowfutx")) {
+                            // Servidor lento y a veces caído, pero es un canal fijo: se usa la última lectura
+                            // buena; si nunca respondió, el link del canal con su primera señal.
+                            String base = s[1].endsWith("/") ? s[1] : s[1] + "/";
+                            try {
+                                ev = canalesNowFutx(base, bajar(base + "channels.json?" + System.currentTimeMillis()), s[0]);
+                                if (!ev.isEmpty()) prefs.edit().putString("nowfutx", new JSONArray(ev).toString()).apply();
+                            } catch (Exception e) {
+                                ev = new java.util.ArrayList<>();
+                                JSONArray guardado = new JSONArray(prefs.getString("nowfutx", "[]"));
+                                for (int q = 0; q < guardado.length(); q++) ev.add(guardado.getJSONObject(q));
+                                if (ev.isEmpty()) {
+                                    String nombre = "Eventos (Principalmente Ascenso)";
+                                    ev.add(new JSONObject().put("fuente", s[0]).put("titulo", nombre).put("canal", true)
+                                            .put("clase", "AR").put("t", 0).put("opciones", new JSONArray().put(opcion("Opción 1", "",
+                                                    base + "?c=" + java.net.URLEncoder.encode(nombre, "UTF-8") + "&o=0"))));
+                                }
+                                notas.put(s[0], s[0] + " (guardado: " + e.getMessage() + ")");
+                                porFuente.put(s[0], ev);
+                                return;
+                            }
+                        } else {                      // TVLibre (y cualquier otra con su mismo formato)
+                            String[] pagina = bajarConDestino(s[1]);
+                            Uri u = Uri.parse(pagina[1]);
+                            if (!permitido(u)) throw new java.io.IOException("redirigió a " + u.getHost());
+                            ev = eventosTvLibre(u.getScheme() + "://" + u.getHost(), pagina[0], s[0]);
+                        }
+                        porFuente.put(s[0], ev);
+                        notas.put(s[0], s[0] + " " + ev.size());
+                    } catch (Exception e) {
+                        notas.put(s[0], s[0] + " falló (" + e.getMessage() + ")");
+                    }
+                });
+                hilos.add(h);
+                h.start();
+            }
+            if (!angulismo.isEmpty()) {
+                final String urlDatos = datosAng;
+                Thread h = new Thread(() -> {
+                    try {
+                        // La página que se abre: la primera dirección que responde (se recuerda en la sesión).
+                        String vivo = angulismoVivo;
+                        if (vivo == null) {
+                            for (String[] s : angulismo) {
+                                try { bajar(s[1]); vivo = s[1]; break; } catch (Exception ignored) { }
+                            }
+                        }
+                        if (vivo == null) throw new java.io.IOException("ninguna dirección responde");
+                        angulismoVivo = vivo;
+                        java.util.List<JSONObject> ev = eventosAngulismo(vivo, bajar(urlDatos + "?t=" + System.currentTimeMillis()), "AngulismoTV");
+                        porFuente.put("AngulismoTV", ev);
+                        notas.put("AngulismoTV", "AngulismoTV " + ev.size());
+                    } catch (Exception e) {
+                        angulismoVivo = null;
+                        notas.put("AngulismoTV", "AngulismoTV falló (" + e.getMessage() + ")");
+                    }
+                });
+                hilos.add(h);
+                h.start();
+            }
+            for (Thread h : hilos) { try { h.join(15000); } catch (InterruptedException ignored) { } }
+
+            JSONArray items = new JSONArray(), ordenJson = new JSONArray();
+            java.util.List<String> nota = new java.util.ArrayList<>();
+            for (String f : orden) {
+                ordenJson.put(f);
+                java.util.List<JSONObject> l = porFuente.get(f);
+                if (l != null) for (JSONObject e : l) items.put(e);
+                if (notas.containsKey(f)) nota.add(notas.get(f));
+            }
+            String json;
+            try {
+                json = new JSONObject().put("ok", true).put("items", items).put("orden", ordenJson)
+                        .put("fuentes", android.text.TextUtils.join(" · ", nota)).toString();
+            } catch (Exception e) {
+                json = "{\"ok\":false,\"items\":[]}";
+            }
+            final String datos = json, resumen = android.text.TextUtils.join(" · ", nota);
+            final int total = items.length();
+            final long ms = SystemClock.elapsedRealtime() - inicio;
+            handler.post(() -> {
+                volcarArchivo("argentina.json", datos);     // pruebas: se guarda aunque la tele esté apagada
+                if (t != turno) { Log.i("PartidosTV", "Argentina: lectura vieja descartada (" + resumen + ")"); return; }
+                Log.i("PartidosTV", "Argentina: " + resumen + " → " + total + " eventos en " + (ms / 100) / 10.0 + " s");
+                if (total > 0) {
+                    // Al abrir la app, el texto llega a veces antes que la pantalla: se manda cuando esté lista.
+                    if (uiLista) ui.evaluateJavascript("app.setArgentina(" + JSONObject.quote(datos) + ")", null);
+                    else argentinaPendiente = datos;
+                    estado("");
+                } else {
+                    estado("!Argentina");
+                }
+                terminar(t);
+            });
+        }, "argentina").start();
+    }
+
     // ------------------------------------------------------------------ mapa liga -> deporte
 
     /**
@@ -930,6 +1375,19 @@ public class MainActivity extends Activity {
             });
         }
 
+        /** «Internacional» / «Argentina»: se recuerda, y se carga solo lo de ese grupo (menos trabajo para la tele). */
+        @JavascriptInterface
+        public void elegirGrupo(String g) {
+            handler.post(() -> {
+                boolean arg = "argentina".equals(g);
+                prefs.edit().putString("grupo", arg ? "argentina" : "internacional").apply();
+                if (arg == modoArgentina) return;
+                modoArgentina = arg;
+                estado(arg ? "Cargando Argentina…" : "Cargando " + sitios[sitio][0] + "…");
+                cargarSitio();
+            });
+        }
+
         // Sin «verSitio»: mostrar el sitio dentro de la app permitiría ver los partidos acá adentro, y lo
         // acordado es que la app solo lista y abre en el navegador. Queda solo para diagnóstico por adb
         // (am start … --ez diagnosticoSitio true).
@@ -949,6 +1407,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        Log.i("PartidosTV", "pausa (uiLista=" + uiLista + ")");
         pausada = true;
         handler.removeCallbacksAndMessages(null);   // mientras mirás el partido, no se actualiza nada
         turno++;
@@ -958,9 +1417,16 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        Log.i("PartidosTV", "vuelve (uiLista=" + uiLista + ", pausada=" + pausada + ")");
+        boolean veniaDePausa = pausada;
         pausada = false;
         if (uiLista && !viendoSitio) cargarSitio();   // al volver, lista fresca
+        // Al abrir, Android a veces pausa y retoma la app antes de que la pantalla termine de cargar: la
+        // pausa descartó la lectura que estaba en curso. Se vuelve a leer apenas la pantalla esté lista.
+        else if (veniaDePausa && !viendoSitio) recargarAlCargarUi = true;
     }
+
+    boolean recargarAlCargarUi;
 
     @Override
     protected void onDestroy() {

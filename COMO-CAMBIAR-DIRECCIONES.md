@@ -24,8 +24,32 @@ sin recompilar.
 - `principal` = de donde salen resultados, minuto y escudos. **La primera es la preferida.**
   Tiene que haber al menos una.
 - `vip` = la lista complementaria (VIPBox/VIPRow). Puede no haber ninguna.
+- `argentina` = los sitios del grupo **Argentina**, en orden de importancia (el primero manda
+  al unir: su nombre del partido, su hora y su primer canal).
 - Las líneas que empiezan con `#` se ignoran.
 - Para agregar un espejo nuevo, sumá una línea. Para sacar uno, borrala.
+
+## Grupo Argentina
+
+Hoy el gist **no tiene** líneas `argentina`, así que la app usa las que trae adentro:
+
+```
+argentina TVLibre = https://tvlibre.st/agenda/
+argentina DeportesTVHD = https://deportestvhd.me/
+argentina AngulismoTV = https://angulismotv.pages.dev/transmision/
+argentina AngulismoTV2 = https://99fcafcf.angulismotv.pages.dev/transmision
+argentina NowFutx = https://nowfutx.xyz/vivo/
+```
+
+- Si un sitio argentino se muda, copiá estas líneas al gist y cambiá la dirección. **Ojo: si
+  ponés alguna línea `argentina`, la app usa solo las del gist**, así que van todas.
+- **El nombre no se cambia**: dice cómo se lee cada sitio (TVLibre es una página, DeportesTVHD un
+  archivo `eventos.js`, AngulismoTV un JSON, NowFutx un canal fijo).
+- `AngulismoTV2` es la misma página en otro dominio: se usa solo si la primera no responde.
+- Los partidos de AngulismoTV salen de un archivo en GitHub; si ese cambia de lugar:
+  `argentina AngulismoDatos = https://…/datos.json` (de esa dirección solo se leen datos,
+  nunca se abre en el navegador).
+- A diferencia de MadPlay77, estos sitios **no** aprenden solos una mudanza: hay que tocar el gist.
 
 ## Qué pasa si algo sale mal
 
@@ -44,5 +68,10 @@ adb shell am start -n ar.partidostv/.MainActivity --es configPrueba "principal X
 ```
 
 Esto usa esa lista sin guardarla y sin leer el gist. Otros parámetros: `--ei sitio N`,
-`--ei sitioVip N` y `--ez volcar true` (guarda las listas leídas en `files/`, que se bajan
-con `adb exec-out run-as ar.partidostv cat files/principal.json`).
+`--ei sitioVip N`, `--es grupo argentina|internacional` (abre en ese grupo y lo deja guardado)
+y `--ez volcar true` (guarda las listas leídas en `files/`, que se bajan con
+`adb exec-out run-as ar.partidostv cat files/principal.json`; la del grupo Argentina es
+`files/argentina.json`).
+
+Con la pantalla de la tele apagada, Android pausa la app y la lectura se descarta (a propósito:
+no se carga nada si nadie mira). El volcado de `argentina.json` igual se guarda.

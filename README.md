@@ -1,14 +1,21 @@
 # Partidos (Android TV)
 
-App personal para Android TV: junta los partidos de MadPlay77 / FCTV33 y VIPBox / VIPRow, los
-ordena por deporte y liga, y abre el elegido **en el navegador de la tele**. La app no reproduce
-video ni muestra el sitio adentro: solo lista y abre.
+App personal para Android TV: junta los partidos de varios sitios, los ordena por deporte y liga,
+y abre el elegido **en el navegador de la tele**. La app no reproduce video ni muestra el sitio
+adentro: solo lista y abre.
+
+Dos grupos, arriba a la izquierda:
+
+- **Internacional**: MadPlay77 / FCTV33 (principal) y VIPBox / VIPRow (complementaria).
+- **Argentina**: TVLibre (principal), DeportesTVHD, AngulismoTV y el canal de Ascenso de NowFutx.
+  Se unen sin repetir; OK abre el primer canal y → recorre los demás (`+N` muestra todos).
+  Las opciones que piden extensión de PC no se muestran (en la tele no andan).
 
 ## Estructura
 
 | Archivo | Qué hace |
 | --- | --- |
-| `app/src/main/java/ar/partidostv/MainActivity.java` | Lectura de los sitios (navegador oculto para MadPlay77, texto directo para VIPBox/VIPRow), direcciones desde el gist, mudanzas, mapa de ligas |
+| `app/src/main/java/ar/partidostv/MainActivity.java` | Lectura de los sitios (navegador oculto para MadPlay77, texto directo para VIPBox/VIPRow y los argentinos), direcciones desde el gist, mudanzas, mapa de ligas |
 | `app/src/main/assets/ui.html` | Interfaz para el control remoto: unión sin repetidos, estado en vivo, banderas, escudos, filtros, favoritos |
 | `COMO-CAMBIAR-DIRECCIONES.md` | Cómo cambiar las direcciones de los sitios desde el celular |
 | `ver-tele.cmd` | Espejo de la tele en la PC (scrcpy) |

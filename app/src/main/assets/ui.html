@@ -58,6 +58,15 @@
   .fila-p .partido { flex: 1; margin: 0; min-width: 0; }
   .alt { flex: none; width: 92px; font-size: 12px; color: var(--tenue); padding: 0 8px; }
   .alt:focus { color: var(--texto); background: var(--panel2); }
+  /* Grupo Argentina: un botón por canal; el ancho se adapta al nombre ("ESPN", "DSports Plus"). */
+  .alt.canal { width: auto; min-width: 64px; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .alt.mas { width: auto; min-width: 44px; color: var(--acento); }
+  /* Con todas las opciones a la vista, los botones siguen en el renglón de abajo. */
+  .fila-p.abierta { flex-wrap: wrap; }
+  .fila-p.abierta .partido { flex: 1 0 55%; }
+  .fila-p.abierta .alt { min-height: 34px; }
+  .liga .logo-liga { width: 18px; height: 18px; object-fit: contain; }
+  #grupos { display: flex; gap: 4px; margin-right: 8px; }
   .hora .cuenta { display: block; color: var(--acento); font-size: 11px; }
   .hora .fin { display: block; color: var(--tenue); font-size: 11px; }
   h2.man { color: #7fb4ff; }
@@ -68,6 +77,10 @@
 <body>
   <header>
     <h1>⚽ <span>Partidos</span></h1>
+    <div id="grupos">
+      <button class="f" id="bInt">Internacional</button>
+      <button class="f" id="bArg">Argentina</button>
+    </div>
     <button class="f" id="bVivo">Solo en vivo</button>
     <button class="f" id="bFav">★ Favoritos</button>
     <button class="f" id="bAct">⟳ Actualizar</button>
@@ -86,7 +99,15 @@
   function guardarLS(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 
   var favs = leerLS("favs", {});          // { claveLiga: true }
-  var filtro = leerLS("filtro", { deporte: "", soloVivo: false, soloFav: false });
+  // Dos grupos: «internacional» (MadPlay77 + VIPBox/VIPRow) y «argentina» (TVLibre, DeportesTVHD…).
+  // Cada uno recuerda sus propios filtros.
+  var grupo = leerLS("grupo", "internacional") === "argentina" ? "argentina" : "internacional";
+  var CLAVE_FILTRO = { internacional: "filtro", argentina: "filtroArg" };
+  function leerFiltro(g) { return leerLS(CLAVE_FILTRO[g], { deporte: "", soloVivo: false, soloFav: false }); }
+  var filtro = leerFiltro(grupo);
+  function guardarFiltro() { guardarLS(CLAVE_FILTRO[grupo], filtro); }
+  var argentinos = [];    // grupo Argentina: eventos de todas sus fuentes, en orden de importancia
+  var abiertos = {};      // filas del grupo Argentina con todas las opciones a la vista
   var principales = [];   // fuente principal (MadPlay77/FCTV33): resultado, minuto, escudos
   var vips = [];          // VIPBox/VIPRow: más deportes, hora exacta, segundo link
   var canales = [];       // canales y señales fijas sin horario (Sky F1, NFL RedZone…), de las páginas de categoría
@@ -630,8 +651,123 @@
     return dif <= 10 && (mismoEquipo(a.cmp1, b.cmp1) || mismoEquipo(a.cmp2, b.cmp2));
   }
 
+  // ---------------------------------------------------------------- grupo Argentina
+  // Cada fuente (TVLibre, DeportesTVHD, AngulismoTV) trae «Liga: Local vs. Visitante», la hora exacta y
+  // los canales. La «clase» es el país o la liga, como la escriben estos sitios (sale de su CSS de banderas).
+  var PAIS_CLASE = {
+    AR: "ar", ARG: "ar", IT: "it", ITA: "it", ENG: "gb-eng", ING: "gb-eng", ES: "es", ESP: "es", ALE: "de", GER: "de",
+    FRA: "fr", FR: "fr", HOL: "nl", NED: "nl", POR: "pt", PT: "pt", TUR: "tr", BRA: "br", BR: "br", MEX: "mx", MX: "mx",
+    PE: "pe", PER: "pe", CH: "cl", CHI: "cl", CL: "cl", USA: "us", US: "us", NFL: "us", NBA: "us", MLB: "us", NHL: "us",
+    MLS: "us", URU: "uy", UY: "uy", COL: "co", CO: "co", PAR: "py", PY: "py", ECU: "ec", EC: "ec", BOL: "bo", VEN: "ve",
+    ESC: "gb-sct", SCO: "gb-sct", BEL: "be", ARA: "sa", SAU: "sa", GRE: "gr", JAP: "jp", SUI: "ch", AUT: "at"
+  };
+  var DEPORTE_CLASE = { NFL: "american-football", NBA: "basketball", MLB: "baseball", NHL: "hockey",
+    UFC: "fighting", BOX: "fighting", F1: "motorsport", TENIS: "tennis", ATP: "tennis" };
+  // AngulismoTV no trae la clase: el país sale del nombre de la competencia (o de cómo la escriben los otros).
+  var PAIS_COMPETENCIA = [
+    [/argentin|liga profesional|primera nacional|primera b\b|primera c\b|b metro|federal a|copa de la liga|trofeo de campeones|reserva/i, "ar"],
+    [/chile/i, "cl"], [/per[uú]\b|liga 1\b/i, "pe"], [/turqu|s[uü]per lig/i, "tr"], [/brasil/i, "br"],
+    [/liga mx|m[eé]xic/i, "mx"], [/\b(mls|nfl|nba|mlb|nhl)\b/i, "us"], [/premier league|championship|efl|fa cup/i, "gb-eng"],
+    [/laliga|la liga|copa del rey/i, "es"], [/bundesliga/i, "de"], [/ligue 1|ligue 2/i, "fr"], [/eredivisie/i, "nl"],
+    [/primeira liga|portugal|ta[cç]a/i, "pt"], [/serie a\b|serie b\b|coppa italia/i, "it"], [/colombia|betplay/i, "co"],
+    [/uruguay/i, "uy"], [/paraguay/i, "py"], [/ecuador|ligapro/i, "ec"], [/scottish|escocia/i, "gb-sct"]
+  ];
+  var ordenFuentesArg = [];
+
+  function claveTexto(s) { return sinAcentos(s).replace(/[^a-z0-9]+/g, " ").trim(); }
+
+  function interpretarArg(it, prioridad) {
+    var tit = (it.titulo || "").replace(/\s+/g, " ").trim();
+    if (!tit) return null;
+    var liga = "", resto = tit, dos = tit.indexOf(": ");
+    if (dos > 0 && dos < 60) { liga = tit.slice(0, dos).trim(); resto = tit.slice(dos + 2).trim(); }
+    var partes = resto.split(/\s+(?:vs\.?|v\.)\s+/i);
+    var clase = (it.clase || "").toUpperCase();
+    // El deporte, por la clase o por el nombre de la liga (no por los equipos: «Racing» no es automovilismo).
+    var deporte = it.canal ? "football" : (DEPORTE_CLASE[clase] || deporteDeLiga(liga || tit, true));
+    var codigo = PAIS_CLASE[clase] || "";
+    if (!codigo && !clase) {
+      var txt = (it.competencia || "") + " " + liga;
+      for (var i = 0; i < PAIS_COMPETENCIA.length && !codigo; i++) if (PAIS_COMPETENCIA[i][0].test(txt)) codigo = PAIS_COMPETENCIA[i][1];
+    }
+    var opciones = (it.opciones || []).filter(function (o) { return o && o.href; }).map(function (o) {
+      return { nombre: (o.nombre || "Opción").trim(), calidad: o.calidad || "", href: o.href, fuente: it.fuente };
+    });
+    var t = +it.t || 0;
+    var dosEquipos = partes.length === 2 && partes[0] && partes[1];
+    return {
+      id: "a:" + claveTexto(tit).slice(0, 60) + ":" + (t ? Math.round(t / 60000) : it.fuente),
+      fuente: it.fuente, prioridad: prioridad, deporte: deporte,
+      liga: it.canal ? (/ascenso/i.test(tit) ? "Ascenso (" + it.fuente + ")" : it.fuente || "Canal") : (liga || it.competencia || "Otros"),
+      ligaOriginal: liga, clase: clase, codigo: codigo, bandera: urlBandera(codigo), logoLiga: it.logoLiga || "",
+      hora: t ? horaLocal(t) : "", min: "", t: t, vivo: false, terminado: false, canal: !!it.canal,
+      local: dosEquipos ? partes[0] : resto, visita: dosEquipos ? partes[1] : "",
+      goles: [], logo1: it.logo1 || "", logo2: it.logo2 || "",
+      opciones: opciones, href: opciones.length ? opciones[0].href : "",
+      sitioEnVivo: null, soloVip: false, vipHref: "",
+      cmp1: dosEquipos ? partes[0] : resto, cmp2: dosEquipos ? partes[1] : ""
+    };
+  }
+
+  /** Suma a «a» los canales de «b» (el mismo partido en otra fuente) y lo que le falte (escudos, bandera). */
+  function sumarFuente(a, b) {
+    var ya = {};
+    a.opciones.forEach(function (o) { ya[o.href] = true; });
+    b.opciones.forEach(function (o) { if (!ya[o.href]) { ya[o.href] = true; a.opciones.push(o); } });
+    if (!a.href && a.opciones.length) a.href = a.opciones[0].href;
+    if (!a.codigo && b.codigo) { a.codigo = b.codigo; a.bandera = b.bandera; }
+    if (!a.logoLiga && b.logoLiga) a.logoLiga = b.logoLiga;
+    if ((!a.logo1 || !a.logo2) && (b.logo1 || b.logo2) && b.visita) {
+      // Los escudos van con su equipo: si la otra fuente lo escribe al revés, se dan vuelta.
+      var alReves = !mismoEquipo(a.cmp1, b.cmp1) && mismoEquipo(a.cmp1, b.cmp2);
+      a.logo1 = a.logo1 || (alReves ? b.logo2 : b.logo1);
+      a.logo2 = a.logo2 || (alReves ? b.logo1 : b.logo2);
+    }
+    a.fuentes = (a.fuentes || [a.fuente]).concat(a.fuentes && a.fuentes.indexOf(b.fuente) >= 0 ? [] : [b.fuente]);
+  }
+
+  /**
+   * Une las fuentes argentinas sin repetir, con las mismas reglas que Internacional (dos equipos ±90 min,
+   * o uno solo ±10 min). Manda la de más arriba en la lista (TVLibre): su nombre, su hora y su primer canal.
+   */
+  function combinarArgentina() {
+    var base = [], porLiga = {};
+    // Cómo escriben la liga los sitios que traen país: sirve para ubicar los de AngulismoTV («Serie A» → Italia).
+    argentinos.forEach(function (v) { if (v.codigo && v.ligaOriginal && v.clase) porLiga[claveTexto(v.ligaOriginal)] = v; });
+    argentinos.forEach(function (v0) {
+      var v = {}; for (var k in v0) v[k] = v0[k];
+      v.opciones = v0.opciones.slice();
+      if (!v.codigo && v.ligaOriginal && porLiga[claveTexto(v.ligaOriginal)]) {
+        v.codigo = porLiga[claveTexto(v.ligaOriginal)].codigo; v.bandera = urlBandera(v.codigo);
+      }
+      var par = null, i;
+      if (!v.canal) {
+        for (i = 0; i < base.length && !par; i++) {
+          var b = base[i];
+          if (!b.canal && b.cmp2 && v.cmp2 && deporteCompatible(b.deporte, v.deporte) &&
+              difMinutos(b.hora, v.hora) <= 90 && coincidenAmbos(b, v)) par = b;
+        }
+        for (i = 0; i < base.length && !par; i++) if (!base[i].canal && mismoPartido(base[i], v)) par = base[i];
+        for (i = 0; i < base.length && !par; i++) {
+          if (!base[i].canal && (!base[i].visita || !v.visita) && mismoEvento(base[i], v)) par = base[i];
+        }
+      }
+      if (par) sumarFuente(par, v);
+      else { v.fuentes = [v.fuente]; base.push(v); }
+    });
+    // Sin ningún canal que se pueda abrir en la tele (solo «con extensión de PC»): no sirve, no se muestra.
+    base = base.filter(function (x) { return x.opciones.length; });
+    base.forEach(function (x) {
+      x.claveLiga = "ar/" + x.deporte + "/" + (x.codigo || "-") + "/" + claveTexto(x.liga);
+      x.primeroArg = x.codigo === "ar";       // las ligas argentinas, primero en cada sección
+      estimarEstado(x);
+    });
+    return base;
+  }
+
   /** Une las dos listas y saca los repetidos (también los que vienen dos veces en la misma fuente). */
   function combinar() {
+    if (grupo === "argentina") { partidos = combinarArgentina(); return; }
     var base = [];
     principales.forEach(function (p) {
       for (var i = 0; i < base.length; i++) {
@@ -720,7 +856,7 @@
       var b = el("button", "f" + (filtro.deporte === d ? " on" : ""),
         d ? (DEPORTES[d] || titulo(d)) + " " + cuenta[d] : "Todos " + partidos.length);
       b.dataset.key = "dep:" + d;
-      b.onclick = function () { filtro.deporte = d; guardarLS("filtro", filtro); dibujar(); };
+      b.onclick = function () { filtro.deporte = d; guardarFiltro(); dibujar(); };
       cont.appendChild(b);
     });
     if (filtro.deporte && !cuenta[filtro.deporte]) { filtro.deporte = ""; }
@@ -781,6 +917,7 @@
     }
     b.onclick = function () { if (window.Android) Android.abrir(x.href); };
     fila.appendChild(b);
+    if (x.opciones) botonesOpciones(fila, x);
     if (x.vipHref) {
       // El mismo partido también está en VIPBox: segundo botón, a la derecha (flecha →).
       var alt = el("button", "f alt", (x.vipFuente || "VIPBox") + " ›");
@@ -797,6 +934,46 @@
     return fila;
   }
 
+  /**
+   * Grupo Argentina: OK abre el primer canal; a la derecha, los otros (→ para llegar). Si son más de 3, un
+   * «+N» los muestra todos (siguen en el renglón de abajo, se recorren igual con ← →).
+   */
+  var MAX_OPCIONES_CERRADO = 3;
+  function botonesOpciones(fila, x) {
+    var resto = x.opciones.slice(1);
+    if (!resto.length) return;
+    // Mismo canal en dos fuentes («DSports» de TVLibre y de DeportesTVHD): «DSports» y «DSports (2)»
+    // (entre paréntesis: «DSports 2» es otro canal).
+    var vistos = {};
+    x.opciones.forEach(function (o, i) {
+      var k = o.nombre.toLowerCase();
+      vistos[k] = (vistos[k] || 0) + 1;
+      o.etiqueta = vistos[k] > 1 ? o.nombre + " (" + vistos[k] + ")" : o.nombre;
+    });
+    var abierta = !!abiertos[x.id];
+    var mostrar = abierta || resto.length <= MAX_OPCIONES_CERRADO ? resto : resto.slice(0, MAX_OPCIONES_CERRADO - 1);
+    mostrar.forEach(function (o, i) {
+      var a = el("button", "f alt canal", o.etiqueta + " ›");
+      a.title = o.etiqueta + (o.calidad ? " · " + o.calidad : "") + " · " + o.fuente;
+      a.dataset.key = "op:" + x.id + ":" + i;
+      a.onclick = function () { if (window.Android) Android.abrir(o.href); };
+      fila.appendChild(a);
+    });
+    if (abierta) fila.classList.add("abierta");
+    if (resto.length > MAX_OPCIONES_CERRADO) {
+      var mas = el("button", "f alt mas", abierta ? "‹ menos" : "+" + (resto.length - mostrar.length));
+      mas.dataset.key = "mas:" + x.id;
+      mas.onclick = function () {
+        if (abiertos[x.id]) delete abiertos[x.id]; else abiertos[x.id] = true;
+        // Al abrir, el cursor va al primer canal nuevo; al cerrar, queda en «+N».
+        focoPedido = abiertos[x.id] ? "op:" + x.id + ":" + mostrar.length : "mas:" + x.id;
+        dibujar();
+      };
+      fila.appendChild(mas);
+    }
+  }
+  var focoPedido = null;
+
   function seccion(main, tituloSec, claseSec, items) {
     if (!items.length) return;
     main.appendChild(el("h2", claseSec, tituloSec + " · " + items.length));
@@ -806,6 +983,7 @@
       if (!porClave[x.claveLiga]) { porClave[x.claveLiga] = { liga: x.liga, clave: x.claveLiga, bandera: x.bandera, items: [] }; grupos.push(porClave[x.claveLiga]); }
       porClave[x.claveLiga].items.push(x);
       if (!porClave[x.claveLiga].bandera && x.bandera) porClave[x.claveLiga].bandera = x.bandera;
+      if (!porClave[x.claveLiga].logoLiga && x.logoLiga) porClave[x.claveLiga].logoLiga = x.logoLiga;
     });
     // Favoritas primero; después, en el orden de los deportes de arriba (fútbol primero); dentro de cada
     // deporte, como vienen (por hora). sort() es estable, así que se respeta el orden original.
@@ -813,6 +991,9 @@
     grupos.sort(function (a, b) {
       var f = (favs[b.clave] ? 1 : 0) - (favs[a.clave] ? 1 : 0);
       if (f) return f;
+      // Grupo Argentina: el fútbol argentino arriba de todo (después de las favoritas).
+      var ar = (b.items[0].primeroArg ? 1 : 0) - (a.items[0].primeroArg ? 1 : 0);
+      if (ar) return ar;
       var da = ORDEN_DEPORTES[a.dep], db = ORDEN_DEPORTES[b.dep];
       if (da !== db) return (da === undefined ? 99 : da) - (db === undefined ? 99 : db);
       return a.pos - b.pos;
@@ -827,6 +1008,7 @@
       };
       cab.appendChild(estrella);
       if (g.bandera) cab.appendChild(imagen(g.bandera, "bandera"));
+      else if (g.logoLiga) cab.appendChild(imagen(g.logoLiga, "logo-liga"));   // sin país (Mundial Sub-17…)
       cab.appendChild(el("span", "nombre", g.liga));
       var grupo = el("div", "grupo");
       grupo.appendChild(cab);
@@ -840,11 +1022,15 @@
   function dibujar() {
     // Si nada cambió (misma lista, mismos filtros y favoritos), no se rearma la pantalla.
     combinar();
-    var firma = JSON.stringify([partidos, filtro, favs]);
+    var firma = JSON.stringify([grupo, partidos, filtro, favs, abiertos]);
     if (firma === firmaAnterior) return;
     firmaAnterior = firma;
 
     var focoAntes = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.key : null;
+    if (focoPedido) { focoAntes = focoPedido; focoPedido = null; }
+    document.getElementById("bInt").classList.toggle("on", grupo === "internacional");
+    document.getElementById("bArg").classList.toggle("on", grupo === "argentina");
+    document.getElementById("bFuente").style.display = grupo === "argentina" ? "none" : "";
     // Posición del cursor en la lista: si ese partido desaparece al actualizar, se queda en el de al lado.
     var enListaAntes = Array.prototype.slice.call(document.querySelectorAll("#lista .f:not(.alt)"));
     indiceFocoAntes = enListaAntes.indexOf(document.activeElement);
@@ -991,9 +1177,24 @@
   });
 
   // ---------------------------------------------------------------- botones de arriba
-  document.getElementById("bVivo").onclick = function () { filtro.soloVivo = !filtro.soloVivo; guardarLS("filtro", filtro); dibujar(); };
-  document.getElementById("bFav").onclick = function () { filtro.soloFav = !filtro.soloFav; guardarLS("filtro", filtro); dibujar(); };
+  document.getElementById("bVivo").onclick = function () { filtro.soloVivo = !filtro.soloVivo; guardarFiltro(); dibujar(); };
+  document.getElementById("bFav").onclick = function () { filtro.soloFav = !filtro.soloFav; guardarFiltro(); dibujar(); };
   document.getElementById("bAct").onclick = function () { if (window.Android) Android.actualizar(); };
+  function cambiarGrupo(g) {
+    grupo = g;
+    guardarLS("grupo", g);
+    filtro = leerFiltro(g);
+    dibujar();
+  }
+  function elegirGrupo(g) {
+    if (g === grupo) return;
+    if (window.Android && Android.elegirGrupo) Android.elegirGrupo(g);
+    cambiarGrupo(g);
+    // El cursor queda en el botón del grupo elegido: para pasar al otro alcanza con ← →.
+    document.getElementById(g === "argentina" ? "bArg" : "bInt").focus({ preventScroll: true });
+  }
+  document.getElementById("bInt").onclick = function () { elegirGrupo("internacional"); };
+  document.getElementById("bArg").onclick = function () { elegirGrupo("argentina"); };
   document.getElementById("bFuente").onclick = function () {
     if (!sitios.length || !window.Android) return;
     Android.elegirSitio((sitioActual + 1) % sitios.length);
@@ -1053,15 +1254,44 @@
       });
       dibujar();
     },
+    /** Java avisa qué grupo está leyendo (al abrir la app): si la pantalla mostraba el otro, se cambia. */
+    setGrupo: function (g) {
+      g = g === "argentina" ? "argentina" : "internacional";
+      if (g !== grupo) { cambiarGrupo(g); restaurarFoco(null); }
+    },
+    /** Grupo Argentina: {items: [...], orden: ["TVLibre", "DeportesTVHD", …], fuentes: "TVLibre 44 · …"} */
+    setArgentina: function (json, guardada) {
+      var o;
+      try { o = typeof json === "string" ? JSON.parse(json) : json; } catch (e) { return; }
+      if (!o || !o.items) return;
+      if (!guardada) {
+        mostrandoGuardadaArg = false;
+        try { localStorage.setItem("ultimaArg", JSON.stringify({ t: Date.now(), o: o })); } catch (e) {}
+      }
+      ordenFuentesArg = o.orden || [];
+      argentinos = o.items.map(function (it) {
+        var p = ordenFuentesArg.indexOf(it.fuente);
+        return interpretarArg(it, p < 0 ? 99 : p);
+      }).filter(Boolean);
+      // Por importancia de la fuente (estable: dentro de cada una, el orden del sitio).
+      argentinos = argentinos.map(function (x, i) { x.pos = i; return x; })
+        .sort(function (a, b) { return a.prioridad - b.prioridad || a.pos - b.pos; });
+      fuentesArg = o.fuentes || "";
+      if (grupo === "argentina") dibujar();
+    },
     setStatus: function (t) {
       // Mientras se ve la lista guardada, el "Cargando…" se reemplaza por un aviso más claro.
-      if (mostrandoGuardada && /^Cargando/.test(t || "")) t = "Lista guardada · actualizando…";
+      var guardadaVisible = grupo === "argentina" ? mostrandoGuardadaArg : mostrandoGuardada;
+      if (guardadaVisible && /^Cargando/.test(t || "")) t = "Lista guardada · actualizando…";
       // "!Sitio" = el sitio no respondió (sin internet, caído…).
       if (t && t.charAt(0) === "!") {
         var sitio = t.slice(1);
-        t = principales.length
-          ? sitio + " no respondió · se ve la última lista"
-          : "No se pudo cargar " + sitio + ". Probá «Actualizar» o cambiá de fuente.";
+        var hay = sitio === "Argentina" ? argentinos.length : principales.length;
+        t = hay
+          ? (sitio === "Argentina" ? "Los sitios argentinos no respondieron" : sitio + " no respondió") + " · se ve la última lista"
+          : sitio === "Argentina"
+            ? "No se pudo cargar ningún sitio argentino. Probá «Actualizar»."
+            : "No se pudo cargar " + sitio + ". Probá «Actualizar» o cambiá de fuente.";
       }
       document.getElementById("estado").textContent = t || "";
     },
@@ -1071,8 +1301,10 @@
     },
     clear: function () { principales = []; dibujar(); },
     // Diagnóstico (solo lectura): ver cómo quedaron unidas las listas.
-    _estado: function () { combinar(); return { principales: principales, vips: vips, partidos: partidos }; }
+    _estado: function () { combinar(); return { grupo: grupo, principales: principales, vips: vips, argentinos: argentinos, fuentesArg: fuentesArg, partidos: partidos }; }
   };
+  var mostrandoGuardadaArg = false, fuentesArg = "";
+  var ultimaArg = leerLS("ultimaArg", null);
 
   // Listas guardadas de la vez anterior (si tienen menos de 6 horas): se muestran al instante.
   var ultima = leerLS("ultima", null), ultimaVip = leerLS("ultimaVip", null);
@@ -1080,13 +1312,19 @@
   if (reciente(ultimaVip)) {
     try { ultimoVip = ultimaVip.o; vips = (ultimaVip.o.items || []).map(interpretarVip).filter(Boolean); } catch (e) { vips = []; }
   }
+  if (reciente(ultimaArg)) {
+    mostrandoGuardadaArg = true;
+    app.setArgentina(ultimaArg.o, true);
+  }
   if (reciente(ultima)) {
     mostrandoGuardada = true;
     app.setData(ultima.o, true);
-    app.setStatus("Lista guardada · actualizando…");
   } else {
     dibujar();
   }
+  if (grupo === "internacional" ? mostrandoGuardada : mostrandoGuardadaArg) app.setStatus("Lista guardada · actualizando…");
+  // El grupo que vale es el de Java (es el que decide qué sitios leer): al terminar de cargar la página
+  // manda app.setGrupo(), que corrige la pantalla si no coincide.
   // Al abrir, el cursor arranca en el primer partido (si todavía no hay lista, en «Solo en vivo»).
   restaurarFoco(null);
 })();
