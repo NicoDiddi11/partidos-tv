@@ -38,12 +38,13 @@ argentina TVLibre = https://tvlibre.st/agenda/
 argentina DeportesTVHD = https://deportestvhd.me/
 argentina AngulismoTV = https://angulismotv.pages.dev/transmision/
 argentina AngulismoTV2 = https://99fcafcf.angulismotv.pages.dev/transmision
+argentina EsporteVIP = https://esportevip.elementfx.com/
 ```
 
 - Si un sitio argentino se muda, copiá estas líneas al gist y cambiá la dirección. **Ojo: si
   ponés alguna línea `argentina`, la app usa solo las del gist**, así que van todas.
 - **El nombre no se cambia**: dice cómo se lee cada sitio (TVLibre es una página, DeportesTVHD un
-  archivo `eventos.js`, AngulismoTV un JSON).
+  archivo `eventos.js`, AngulismoTV un JSON, EsporteVIP una página que se lee con el navegador oculto).
 - `AngulismoTV2` es la misma página en otro dominio: se usa solo si la primera no responde.
 - Los partidos de AngulismoTV salen de un archivo en GitHub; si ese cambia de lugar:
   `argentina AngulismoDatos = https://…/datos.json` (de esa dirección solo se leen datos,

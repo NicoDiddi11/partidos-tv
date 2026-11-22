@@ -7,7 +7,8 @@ adentro: solo lista y abre.
 Dos grupos, arriba a la izquierda:
 
 - **Internacional**: MadPlay77 / FCTV33 (principal) y VIPBox / VIPRow (complementaria).
-- **Argentina**: TVLibre (principal), DeportesTVHD y AngulismoTV.
+- **Argentina**: TVLibre (principal), DeportesTVHD, AngulismoTV y el grupo «LPF Play Argentina» de EsporteVIP
+  (Ascenso: Federal A, Primera C…; esos partidos no tienen página propia, el botón abre la portada del sitio).
   Se unen sin repetir; OK abre el primer canal y → recorre los demás (`+N` muestra todos).
   Las opciones que piden extensión de PC no se muestran (en la tele no andan).
 

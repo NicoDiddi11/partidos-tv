@@ -72,6 +72,7 @@ public class MainActivity extends Activity {
             {"DeportesTVHD", "https://deportestvhd.me/"},
             {"AngulismoTV", "https://angulismotv.pages.dev/transmision/"},
             {"AngulismoTV2", "https://99fcafcf.angulismotv.pages.dev/transmision"},
+            {"EsporteVIP", "https://esportevip.elementfx.com/"},
     };
     /** De donde AngulismoTV (sus dos dominios) saca los partidos. Se cambia con «argentina AngulismoDatos = …». */
     static final String DATOS_ANGULISMO =
@@ -453,7 +454,8 @@ public class MainActivity extends Activity {
      * sitio es un subdominio: "99fcafcf.angulismotv.pages.dev" -> "angulismotv.pages.dev", así permitir
      * AngulismoTV no permite cualquier otra página de pages.dev.
      */
-    static final String[] ALOJAMIENTOS = {"pages.dev", "workers.dev", "github.io", "netlify.app", "vercel.app", "web.app"};
+    static final String[] ALOJAMIENTOS = {"pages.dev", "workers.dev", "github.io", "netlify.app", "vercel.app", "web.app",
+            "elementfx.com"};
 
     static String dominioBase(String host) {
         String[] p = host.split("\\.");
@@ -471,8 +473,8 @@ public class MainActivity extends Activity {
     void cargarSitio() {
         probeOtroVip = false;
         if (modoArgentina) {
-            // Grupo Argentina: todo es texto (HTML/JSON), sin navegador oculto. Se descarga el lector por si
-            // estaba a mitad de leer MadPlay77 (cambiaste de grupo).
+            // Grupo Argentina: casi todo es texto (HTML/JSON); el lector solo se usa para EsporteVIP. Se
+            // descarga por si estaba a mitad de leer MadPlay77 (cambiaste de grupo).
             handler.removeCallbacksAndMessages(null);
             turno++;
             liberarLector();
@@ -504,7 +506,8 @@ public class MainActivity extends Activity {
 
     /** Descarga el sitio para que deje de consumir CPU y memoria hasta la próxima actualización. */
     void liberarLector() {
-        if (viendoSitio) return;
+        // Mientras lee EsporteVIP (grupo Argentina) el lector está ocupado: lo libera ese lector al terminar.
+        if (viendoSitio || (leyendoEsporte && esporteTurno == turno)) return;
         lector.stopLoading();
         lector.loadUrl("about:blank");
         lector.onPause();
@@ -1005,30 +1008,46 @@ public class MainActivity extends Activity {
      * Lee todas las fuentes argentinas A LA VEZ y manda la lista a la interfaz con el orden de importancia
      * (el del gist / de fábrica). Si una no responde, las otras igual aportan.
      */
+    // Lo leído en la actualización en curso, por fuente. Las de texto llegan juntas; EsporteVIP (navegador
+    // oculto) puede llegar después: en ese caso la lista se vuelve a mandar con todo.
+    final java.util.Map<String, java.util.List<JSONObject>> argPorFuente = new java.util.concurrent.ConcurrentHashMap<>();
+    final java.util.Map<String, String> argNotas = new java.util.concurrent.ConcurrentHashMap<>();
+    java.util.List<String> argOrden = new java.util.ArrayList<>();
+    boolean argTextoListo;
+    long argInicio;
+
     void leerArgentina(final int t) {
         final String[][] lista = sitiosArg;
-        final long inicio = SystemClock.elapsedRealtime();
+        argInicio = SystemClock.elapsedRealtime();
+        argPorFuente.clear();
+        argNotas.clear();
+        argTextoListo = false;
         if (uiLista) estado("Cargando Argentina…");
         Log.i("PartidosTV", "Argentina: leyendo " + lista.length + " direcciones (turno " + t + ")");
+        // Por nombre: cada sitio se lee a su manera. Las dos direcciones de AngulismoTV son una sola fuente.
+        String datosAng0 = DATOS_ANGULISMO;
+        final java.util.List<String[]> angulismo = new java.util.ArrayList<>();
+        final java.util.List<String[]> otras = new java.util.ArrayList<>();
+        String[] esporte = null;
+        for (String[] s : lista) {
+            String n = s[0].toLowerCase(Locale.ROOT);
+            if (n.equals("angulismodatos")) datosAng0 = s[1];
+            else if (n.startsWith("angulismo")) angulismo.add(s);
+            else if (n.startsWith("esporte")) esporte = s;
+            else otras.add(s);
+        }
+        java.util.List<String> orden = new java.util.ArrayList<>();
+        for (String[] s : lista) {
+            String n = s[0].toLowerCase(Locale.ROOT);
+            if (n.startsWith("angulismo") && !orden.contains("AngulismoTV") && !n.equals("angulismodatos")) orden.add("AngulismoTV");
+            else if (!n.startsWith("angulismo")) orden.add(s[0]);
+        }
+        argOrden = orden;
+        if (esporte != null) leerEsporte(t, esporte);
+        final String datosAng = datosAng0;
         new Thread(() -> {
-            // Por nombre: cada sitio se lee a su manera. Las dos direcciones de AngulismoTV son una sola fuente.
-            String datosAng = DATOS_ANGULISMO;
-            java.util.List<String[]> angulismo = new java.util.ArrayList<>();
-            java.util.List<String[]> otras = new java.util.ArrayList<>();
-            for (String[] s : lista) {
-                String n = s[0].toLowerCase(Locale.ROOT);
-                if (n.equals("angulismodatos")) datosAng = s[1];
-                else if (n.startsWith("angulismo")) angulismo.add(s);
-                else otras.add(s);
-            }
-            java.util.List<String> orden = new java.util.ArrayList<>();
-            for (String[] s : lista) {
-                String n = s[0].toLowerCase(Locale.ROOT);
-                if (n.startsWith("angulismo") && !orden.contains("AngulismoTV") && !n.equals("angulismodatos")) orden.add("AngulismoTV");
-                else if (!n.startsWith("angulismo")) orden.add(s[0]);
-            }
-            final java.util.Map<String, java.util.List<JSONObject>> porFuente = new java.util.concurrent.ConcurrentHashMap<>();
-            final java.util.Map<String, String> notas = new java.util.concurrent.ConcurrentHashMap<>();
+            final java.util.Map<String, java.util.List<JSONObject>> porFuente = argPorFuente;
+            final java.util.Map<String, String> notas = argNotas;
             java.util.List<Thread> hilos = new java.util.ArrayList<>();
             for (final String[] s : otras) {
                 Thread h = new Thread(() -> {
@@ -1080,40 +1099,156 @@ public class MainActivity extends Activity {
                 h.start();
             }
             for (Thread h : hilos) { try { h.join(15000); } catch (InterruptedException ignored) { } }
-
-            JSONArray items = new JSONArray(), ordenJson = new JSONArray();
-            java.util.List<String> nota = new java.util.ArrayList<>();
-            for (String f : orden) {
-                ordenJson.put(f);
-                java.util.List<JSONObject> l = porFuente.get(f);
-                if (l != null) for (JSONObject e : l) items.put(e);
-                if (notas.containsKey(f)) nota.add(notas.get(f));
-            }
-            String json;
-            try {
-                json = new JSONObject().put("ok", true).put("items", items).put("orden", ordenJson)
-                        .put("fuentes", android.text.TextUtils.join(" · ", nota)).toString();
-            } catch (Exception e) {
-                json = "{\"ok\":false,\"items\":[]}";
-            }
-            final String datos = json, resumen = android.text.TextUtils.join(" · ", nota);
-            final int total = items.length();
-            final long ms = SystemClock.elapsedRealtime() - inicio;
             handler.post(() -> {
-                volcarArchivo("argentina.json", datos);     // pruebas: se guarda aunque la tele esté apagada
-                if (t != turno) { Log.i("PartidosTV", "Argentina: lectura vieja descartada (" + resumen + ")"); return; }
-                Log.i("PartidosTV", "Argentina: " + resumen + " → " + total + " eventos en " + (ms / 100) / 10.0 + " s");
-                if (total > 0) {
-                    // Al abrir la app, el texto llega a veces antes que la pantalla: se manda cuando esté lista.
-                    if (uiLista) ui.evaluateJavascript("app.setArgentina(" + JSONObject.quote(datos) + ")", null);
-                    else argentinaPendiente = datos;
-                    estado("");
-                } else {
-                    estado("!Argentina");
-                }
+                if (t != turno) { Log.i("PartidosTV", "Argentina: lectura vieja descartada"); return; }
+                argTextoListo = true;
+                publicarArgentina(t, true);
                 terminar(t);
             });
         }, "argentina").start();
+    }
+
+    /** Junta lo leído hasta ahora (en el orden de importancia) y lo manda a la interfaz. */
+    void publicarArgentina(int t, boolean conAviso) {
+        JSONArray items = new JSONArray(), ordenJson = new JSONArray();
+        java.util.List<String> nota = new java.util.ArrayList<>();
+        for (String f : argOrden) {
+            ordenJson.put(f);
+            java.util.List<JSONObject> l = argPorFuente.get(f);
+            if (l != null) for (JSONObject e : l) items.put(e);
+            if (argNotas.containsKey(f)) nota.add(argNotas.get(f));
+        }
+        String json;
+        try {
+            json = new JSONObject().put("ok", true).put("items", items).put("orden", ordenJson)
+                    .put("fuentes", android.text.TextUtils.join(" · ", nota)).toString();
+        } catch (Exception e) {
+            json = "{\"ok\":false,\"items\":[]}";
+        }
+        String resumen = android.text.TextUtils.join(" · ", nota);
+        int total = items.length();
+        long ms = SystemClock.elapsedRealtime() - argInicio;
+        volcarArchivo("argentina.json", json);     // pruebas: se guarda aunque la tele esté apagada
+        Log.i("PartidosTV", "Argentina: " + resumen + " → " + total + " eventos en " + (ms / 100) / 10.0 + " s");
+        if (total > 0) {
+            // Al abrir la app, el texto llega a veces antes que la pantalla: se manda cuando esté lista.
+            if (uiLista) ui.evaluateJavascript("app.setArgentina(" + JSONObject.quote(json) + ")", null);
+            else argentinaPendiente = json;
+            estado("");
+        } else if (conAviso) {
+            estado("!Argentina");
+        }
+    }
+
+    // ------------------------------------------------------------------ EsporteVIP (LPF Play)
+
+    /**
+     * EsporteVIP arma sus listas en el navegador (las pide a su servidor con una firma propia), así que se
+     * lee como MadPlay77: el lector carga la página, se despliega «LPF PLAY ARGENTINA» con un clic, y se
+     * toman los partidos de ese grupo. Los partidos no tienen página propia: el botón abre la portada.
+     */
+    static final String JS_ESPORTE =
+            "(function(){try{" +
+            "var it=[].filter.call(document.querySelectorAll('a.item'),function(a){return /LPF\\s*PLAY/i.test(a.textContent);})[0];" +
+            "if(!it)return JSON.stringify({ok:false,error:'sin grupo LPF'});" +
+            "var box=it.nextElementSibling;" +
+            "if(!window.__ptvAbierto){window.__ptvAbierto=1;it.click();return JSON.stringify({ok:false,esperando:1});}" +
+            "if(!box)return JSON.stringify({ok:false,esperando:1});" +
+            "var evs=[].map.call(box.querySelectorAll('li.evento'),function(li){" +
+            " var oc=li.getAttribute('onclick')||'',m=oc.match(/iniciar\\('((?:\\\\'|[^'])*)'/);" +
+            " var a=li.querySelector('.areae'),sp=a&&a.querySelector('span'),bs=a?a.querySelectorAll(':scope > b'):[];" +
+            " return {titulo:m?m[1].replace(/\\\\'/g,\"'\"):'',camp:sp?sp.textContent:'',hora:bs.length?bs[bs.length-1].textContent:''};});" +
+            "if(!evs.length&&!/Nenhum evento/i.test(box.textContent))return JSON.stringify({ok:false,esperando:1});" +
+            "return JSON.stringify({ok:true,items:evs});" +
+            "}catch(e){return JSON.stringify({ok:false,error:String(e)});}})()";
+    static final java.util.regex.Pattern P_HORA_EVIP = java.util.regex.Pattern.compile(
+            "(\\d{1,2})/(\\d{1,2})\\D+(\\d{1,2}):(\\d{2})");
+    static final long ESPORTE_VIGENCIA_MS = 5 * 60_000L;   // su lista cambia poco: no se recarga en cada vuelta
+    java.util.List<JSONObject> esporteUltimo;
+    long esporteCuando;
+    boolean leyendoEsporte;
+    int esporteTurno;
+
+    void leerEsporte(final int t, final String[] s) {
+        if (esporteUltimo != null && SystemClock.elapsedRealtime() - esporteCuando < ESPORTE_VIGENCIA_MS) {
+            argPorFuente.put(s[0], esporteUltimo);
+            argNotas.put(s[0], s[0] + " " + esporteUltimo.size() + " (guardado)");
+            return;
+        }
+        if (viendoSitio) return;
+        leyendoEsporte = true;
+        esporteTurno = t;
+        lector.onResume();
+        lector.loadUrl(s[1]);
+        handler.postDelayed(() -> leerEsporteVez(t, s, 1), 3000);
+    }
+
+    void leerEsporteVez(final int t, final String[] s, final int vez) {
+        if (t != turno) { leyendoEsporte = false; return; }
+        lector.evaluateJavascript(JS_ESPORTE, r -> {
+            if (t != turno) { leyendoEsporte = false; return; }
+            JSONObject o = null;
+            try { o = new JSONObject((String) new JSONTokener(r).nextValue()); } catch (Exception ignored) { }
+            if (o != null && o.optBoolean("ok")) {
+                try {
+                    Uri u = Uri.parse(s[1]);
+                    java.util.List<JSONObject> ev = eventosEsporte(u.getScheme() + "://" + u.getHost() + "/",
+                            o.optJSONArray("items"), s[0]);
+                    esporteUltimo = ev;
+                    esporteCuando = SystemClock.elapsedRealtime();
+                    argPorFuente.put(s[0], ev);
+                    argNotas.put(s[0], s[0] + " " + ev.size());
+                } catch (Exception e) {
+                    argNotas.put(s[0], s[0] + " falló (" + e.getMessage() + ")");
+                }
+                terminarEsporte(t);
+            } else if (vez >= 25) {              // ~25 s: el sitio no armó la lista
+                argNotas.put(s[0], s[0] + " falló (" + (o == null ? "sin respuesta" : o.optString("error", "no cargó")) + ")");
+                terminarEsporte(t);
+            } else {
+                handler.postDelayed(() -> leerEsporteVez(t, s, vez + 1), 1000);
+            }
+        });
+    }
+
+    void terminarEsporte(int t) {
+        leyendoEsporte = false;
+        liberarLector();
+        // Si las de texto ya se mostraron, se vuelve a mandar la lista con LPF Play sumado.
+        if (argTextoListo) publicarArgentina(t, false);
+    }
+
+    /** {titulo:"Douglas Haig x Olimpo", camp:"Federal A > Semifinal - Ida", hora:"22/11 às 16:30"} (hora de Argentina). */
+    static java.util.List<JSONObject> eventosEsporte(String portada, JSONArray a, String fuente) throws Exception {
+        java.util.List<JSONObject> r = new java.util.ArrayList<>();
+        java.util.Calendar hoy = java.util.Calendar.getInstance(TZ_AR);
+        for (int k = 0; a != null && k < a.length(); k++) {
+            JSONObject x = a.optJSONObject(k);
+            if (x == null) continue;
+            String tit = x.optString("titulo").trim().replaceAll("\\s+x\\s+", " vs. ");
+            if (tit.isEmpty()) continue;
+            String liga = x.optString("camp").split(">")[0].trim();
+            long t = 0;
+            java.util.regex.Matcher m = P_HORA_EVIP.matcher(x.optString("hora"));
+            if (m.find()) {
+                java.util.Calendar c = java.util.Calendar.getInstance(TZ_AR);
+                c.clear();
+                int mes = Integer.parseInt(m.group(2)) - 1, anio = hoy.get(java.util.Calendar.YEAR);
+                int dif = mes - hoy.get(java.util.Calendar.MONTH);
+                if (dif < -6) anio++; else if (dif > 6) anio--;     // diciembre / enero
+                c.set(anio, mes, Integer.parseInt(m.group(1)), Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)), 0);
+                t = c.getTimeInMillis();
+            }
+            JSONObject e = new JSONObject();
+            e.put("fuente", fuente);
+            e.put("clase", "AR");
+            e.put("titulo", (liga.isEmpty() ? "" : liga + ": ") + tit);
+            e.put("competencia", liga);
+            e.put("t", t);
+            e.put("opciones", new JSONArray().put(opcion("LPF Play", "", portada)));
+            r.add(e);
+        }
+        return r;
     }
 
     // ------------------------------------------------------------------ mapa liga -> deporte
