@@ -43,6 +43,11 @@
   .equipo span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .local { justify-content: flex-end; }
   .escudo { width: 22px; height: 22px; object-fit: contain; flex: none; }
+  /* Sin escudo: el ícono del deporte en su lugar (emoji del sistema, del mismo tamaño). */
+  .equipo span.icono, .solo-tit .icono { width: 22px; font-size: 17px; line-height: 22px; text-align: center;
+    overflow: visible; text-overflow: clip; flex: none; }
+  .solo-tit { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .solo-tit span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .liga button { padding: 0 8px; font-size: 15px; background: transparent; color: var(--tenue); }
   .liga button.fav { color: var(--acento); }
 
@@ -876,11 +881,26 @@
     return i;
   }
 
-  function equipo(nombre, logo, local) {
+  // Ícono de cada deporte: va donde falta el escudo, o antes del nombre en eventos sin dos equipos.
+  var ICONO_DEPORTE = {
+    football: "⚽", uefa: "⚽", basketball: "🏀", tennis: "🎾", hockey: "🏒", "american-football": "🏈",
+    baseball: "⚾", volleyball: "🏐", rugby: "🏉", "aussie-rules": "🏉", cricket: "🏏", handball: "🤾",
+    badminton: "🏸", "table-tennis": "🏓", fighting: "🥊", motorsport: "🏎️", cycling: "🚴", golf: "⛳",
+    darts: "🎯", snooker: "🎱", others: "🏆"
+  };
+  function iconoDe(x) { return x.canal ? "📺" : (ICONO_DEPORTE[x.deporte] || "🏆"); }
+  function icono(txt) { return el("span", "icono", txt); }
+
+  function equipo(nombre, logo, local, ico) {
     var d = el("div", "equipo " + (local ? "local" : "visita"));
     var s = el("span", null, nombre);
     if (local) d.appendChild(s);
-    if (logo) d.appendChild(imagen(logo, "escudo"));
+    if (logo) {
+      var img = imagen(logo, "escudo");
+      // Escudo con link caído: en vez del hueco, el ícono del deporte.
+      img.onerror = function () { if (img.parentNode) img.parentNode.replaceChild(icono(ico), img); };
+      d.appendChild(img);
+    } else d.appendChild(icono(ico));
     if (!local) d.appendChild(s);
     return d;
   }
@@ -908,13 +928,17 @@
     }
     b.appendChild(h);
     if (x.visita) {
-      b.appendChild(equipo(x.local, x.logo1, true));
+      var ico = iconoDe(x);
+      b.appendChild(equipo(x.local, x.logo1, true, ico));
       var r = x.goles.length === 2 ? el("div", "res", x.goles[0] + " - " + x.goles[1]) : el("div", "res nada", "vs");
       b.appendChild(r);
-      b.appendChild(equipo(x.visita, x.logo2, false));
+      b.appendChild(equipo(x.visita, x.logo2, false, ico));
     } else {
       b.classList.add("solo");
-      b.appendChild(el("div", "local", x.local || x.liga));
+      var t = el("div", "solo-tit");
+      t.appendChild(icono(iconoDe(x)));
+      t.appendChild(el("span", null, x.local || x.liga));
+      b.appendChild(t);
     }
     b.onclick = function () { if (window.Android) Android.abrir(x.href); };
     fila.appendChild(b);
