@@ -449,7 +449,8 @@
   // Cuánto dura (de punta a punta, con entretiempos) un partido/evento de cada deporte, en minutos.
   // MadPlay77 solo marca el minuto en fútbol; en el resto el estado se deduce de la hora con esto.
   var DURACION = {
-    football: 120, basketball: 130, hockey: 165,   // básquet FIBA ~2 h; la NBA la confirma VIPBox mientras dura "american-football": 210, baseball: 210,
+    // Fútbol y básquet: 3 h de margen (pedido de Nicolás): alargue, penales, demoras, NBA.
+    football: 180, basketball: 180, hockey: 165, "american-football": 210, baseball: 210,
     tennis: 180, volleyball: 150, handball: 100, rugby: 110, cricket: 240, "aussie-rules": 150,
     fighting: 300, motorsport: 180, golf: 600, darts: 300, snooker: 300, cycling: 330,
     badminton: 120, "table-tennis": 120, others: 180

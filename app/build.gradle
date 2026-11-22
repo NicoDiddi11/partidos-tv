@@ -16,8 +16,8 @@ android {
         applicationId 'ar.partidostv'
         minSdk 21
         targetSdk 35
-        versionCode 18
-        versionName '18.0'
+        versionCode 19
+        versionName '19.0'
     }
 
     signingConfigs {
