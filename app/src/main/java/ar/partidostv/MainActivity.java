@@ -1152,8 +1152,12 @@ public class MainActivity extends Activity {
             "var it=[].filter.call(document.querySelectorAll('a.item'),function(a){return /LPF\\s*PLAY/i.test(a.textContent);})[0];" +
             "if(!it)return JSON.stringify({ok:false,error:'sin grupo LPF'});" +
             "var box=it.nextElementSibling;" +
-            "if(!window.__ptvAbierto){window.__ptvAbierto=1;it.click();return JSON.stringify({ok:false,esperando:1});}" +
-            "if(!box)return JSON.stringify({ok:false,esperando:1});" +
+            // El clic se repite cada 4 lecturas mientras siga en «Carregando»: al principio la función que
+            // despliega el grupo todavía no existe y el clic no hace nada.
+            "window.__ptvN=(window.__ptvN||0)+1;" +
+            "var cargando=!box||/Carregando/i.test(box.textContent);" +
+            "if(cargando&&window.__ptvN%4===1){it.click();}" +
+            "if(cargando)return JSON.stringify({ok:false,esperando:1,txt:box?box.textContent.trim().slice(0,80):''});" +
             "var evs=[].map.call(box.querySelectorAll('li.evento'),function(li){" +
             " var oc=li.getAttribute('onclick')||'',m=oc.match(/iniciar\\('((?:\\\\'|[^'])*)'/);" +
             " var a=li.querySelector('.areae'),sp=a&&a.querySelector('span'),bs=a?a.querySelectorAll(':scope > b'):[];" +
@@ -1185,10 +1189,19 @@ public class MainActivity extends Activity {
 
     void leerEsporteVez(final int t, final String[] s, final int vez) {
         if (t != turno) { leyendoEsporte = false; return; }
+        if (!leyendoEsporte || esporteTurno != t) return;
+        if (vez > 25) {                          // ~28 s: el sitio no armó la lista (o no respondió)
+            argNotas.put(s[0], s[0] + " falló (no cargó)");
+            terminarEsporte(t);
+            return;
+        }
+        // El próximo intento se agenda ya: si el sitio navega o se traba, la respuesta puede no llegar nunca.
+        handler.postDelayed(() -> leerEsporteVez(t, s, vez + 1), 1000);
         lector.evaluateJavascript(JS_ESPORTE, r -> {
-            if (t != turno) { leyendoEsporte = false; return; }
+            if (t != turno || !leyendoEsporte || esporteTurno != t) return;
             JSONObject o = null;
             try { o = new JSONObject((String) new JSONTokener(r).nextValue()); } catch (Exception ignored) { }
+            if (vez % 5 == 1) Log.i("PartidosTV", "EsporteVIP intento " + vez + ": " + (r == null ? "null" : r.length() > 120 ? r.substring(0, 120) : r));
             if (o != null && o.optBoolean("ok")) {
                 try {
                     Uri u = Uri.parse(s[1]);
@@ -1202,11 +1215,6 @@ public class MainActivity extends Activity {
                     argNotas.put(s[0], s[0] + " falló (" + e.getMessage() + ")");
                 }
                 terminarEsporte(t);
-            } else if (vez >= 25) {              // ~25 s: el sitio no armó la lista
-                argNotas.put(s[0], s[0] + " falló (" + (o == null ? "sin respuesta" : o.optString("error", "no cargó")) + ")");
-                terminarEsporte(t);
-            } else {
-                handler.postDelayed(() -> leerEsporteVez(t, s, vez + 1), 1000);
             }
         });
     }
