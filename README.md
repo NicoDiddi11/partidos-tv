@@ -7,7 +7,7 @@ adentro: solo lista y abre.
 Dos grupos, arriba a la izquierda:
 
 - **Internacional**: MadPlay77 / FCTV33 (principal) y VIPBox / VIPRow (complementaria).
-- **Argentina**: TVLibre (principal), DeportesTVHD, AngulismoTV y el canal de Ascenso de NowFutx.
+- **Argentina**: TVLibre (principal), DeportesTVHD y AngulismoTV.
   Se unen sin repetir; OK abre el primer canal y → recorre los demás (`+N` muestra todos).
   Las opciones que piden extensión de PC no se muestran (en la tele no andan).
 

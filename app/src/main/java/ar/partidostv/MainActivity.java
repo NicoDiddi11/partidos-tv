@@ -72,9 +72,8 @@ public class MainActivity extends Activity {
             {"DeportesTVHD", "https://deportestvhd.me/"},
             {"AngulismoTV", "https://angulismotv.pages.dev/transmision/"},
             {"AngulismoTV2", "https://99fcafcf.angulismotv.pages.dev/transmision"},
-            {"NowFutx", "https://nowfutx.xyz/vivo/"},
     };
-    /** De donde AngulismoTV (y NowFutx, para su agenda) sacan los partidos. Se cambia con «argentina AngulismoDatos = …». */
+    /** De donde AngulismoTV (sus dos dominios) saca los partidos. Se cambia con «argentina AngulismoDatos = …». */
     static final String DATOS_ANGULISMO =
             "https://raw.githubusercontent.com/tadeoallende/repos-web/refs/heads/main/datos.json";
     String[][] sitiosArg = ARG_FABRICA;
@@ -187,6 +186,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("partidos", MODE_PRIVATE);
+        prefs.edit().remove("nowfutx").apply();   // v20: NowFutx ya no se usa (borra su lista guardada)
         // La versión 1 guardaba el índice con FCTV33 primero: se resetea a la nueva preferencia.
         if (prefs.getInt("version", 1) < 2) prefs.edit().putInt("version", 2).putInt("sitio", 0).apply();
         // Última lista de direcciones que se leyó del gist (si nunca se pudo, quedan las de fábrica).
@@ -995,32 +995,6 @@ public class MainActivity extends Activity {
         return r;
     }
 
-    /**
-     * NowFutx: no tiene partidos sino un canal fijo, «Eventos (Principalmente Ascenso)», con varias señales
-     * que van cambiando según lo que se juegue. Se muestra como un canal: el link abre esa señal en su página.
-     */
-    static java.util.List<JSONObject> canalesNowFutx(String base, String json, String fuente) throws Exception {
-        java.util.List<JSONObject> r = new java.util.ArrayList<>();
-        JSONArray a = new JSONArray(json);
-        for (int k = 0; k < a.length(); k++) {
-            JSONObject x = a.optJSONObject(k);
-            if (x == null || !x.optString("name").toLowerCase(Locale.ROOT).contains("ascenso")) continue;
-            if (!x.optBoolean("show", true)) continue;
-            String nombre = x.optString("name");
-            JSONArray op = new JSONArray(), os = x.optJSONArray("options");
-            for (int o = 0; os != null && o < os.length(); o++) {
-                JSONObject oo = os.optJSONObject(o);
-                if (oo == null || P_EXTENSION.matcher(oo.optString("name")).find()) continue;
-                op.put(opcion(oo.optString("name"), "",
-                        base + "?c=" + java.net.URLEncoder.encode(nombre, "UTF-8") + "&o=" + o));
-            }
-            if (op.length() == 0) continue;
-            r.add(new JSONObject().put("fuente", fuente).put("titulo", nombre).put("canal", true)
-                    .put("clase", "AR").put("t", 0).put("opciones", op));
-        }
-        return r;
-    }
-
     /** Lista argentina leída antes de que la interfaz terminara de cargar. */
     String argentinaPendiente;
 
@@ -1066,27 +1040,6 @@ public class MainActivity extends Activity {
                             String base = u.getScheme() + "://" + u.getHost();
                             // Su página pide /eventos.js?v=<hora> para no recibir una copia vieja: igual acá.
                             ev = eventosDeportesTvHd(base, bajar(base + "/eventos.js?v=" + System.currentTimeMillis()), s[0]);
-                        } else if (n.startsWith("nowfutx")) {
-                            // Servidor lento y a veces caído, pero es un canal fijo: se usa la última lectura
-                            // buena; si nunca respondió, el link del canal con su primera señal.
-                            String base = s[1].endsWith("/") ? s[1] : s[1] + "/";
-                            try {
-                                ev = canalesNowFutx(base, bajar(base + "channels.json?" + System.currentTimeMillis()), s[0]);
-                                if (!ev.isEmpty()) prefs.edit().putString("nowfutx", new JSONArray(ev).toString()).apply();
-                            } catch (Exception e) {
-                                ev = new java.util.ArrayList<>();
-                                JSONArray guardado = new JSONArray(prefs.getString("nowfutx", "[]"));
-                                for (int q = 0; q < guardado.length(); q++) ev.add(guardado.getJSONObject(q));
-                                if (ev.isEmpty()) {
-                                    String nombre = "Eventos (Principalmente Ascenso)";
-                                    ev.add(new JSONObject().put("fuente", s[0]).put("titulo", nombre).put("canal", true)
-                                            .put("clase", "AR").put("t", 0).put("opciones", new JSONArray().put(opcion("Opción 1", "",
-                                                    base + "?c=" + java.net.URLEncoder.encode(nombre, "UTF-8") + "&o=0"))));
-                                }
-                                notas.put(s[0], s[0] + " (guardado: " + e.getMessage() + ")");
-                                porFuente.put(s[0], ev);
-                                return;
-                            }
                         } else {                      // TVLibre (y cualquier otra con su mismo formato)
                             String[] pagina = bajarConDestino(s[1]);
                             Uri u = Uri.parse(pagina[1]);
