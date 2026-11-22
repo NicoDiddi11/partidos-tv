@@ -89,6 +89,7 @@
   var filtro = leerLS("filtro", { deporte: "", soloVivo: false, soloFav: false });
   var principales = [];   // fuente principal (MadPlay77/FCTV33): resultado, minuto, escudos
   var vips = [];          // VIPBox/VIPRow: más deportes, hora exacta, segundo link
+  var canales = [];       // canales y señales fijas sin horario (Sky F1, NFL RedZone…), de las páginas de categoría
   var partidos = [];      // la unión de las dos, que es lo que se muestra
   var sitios = [], sitioActual = 0;
 
@@ -174,7 +175,9 @@
   // Íconos sin país (eventos internacionales): sin bandera, solo un nombre prolijo.
   var ICONOS_SIN_PAIS = { mma: "MMA", ufc: "UFC", boxing: "Boxeo", golf: "Golf", darts: "Dardos", atp: "ATP",
     wta: "WTA", rugby: "Rugby", handball: "Handball", football: "Fútbol", basketball: "Básquet",
-    television: "Canales", pentathlon: "Pentatlón", tennis: "Tenis", cricket: "Cricket" };
+    television: "Canales", pentathlon: "Pentatlón", tennis: "Tenis", cricket: "Cricket",
+    "formula-1": "Fórmula 1", f1: "Fórmula 1", motogp: "MotoGP", "moto-gp": "MotoGP", motorsport: "Automovilismo",
+    nascar: "NASCAR", wwe: "WWE", wrestling: "Lucha libre", "atp-finals": "ATP Finals", news: "Noticias" };
   // Ligas que MadPlay77 lista sin país ni bandera, pero se sabe de dónde son.
   var LIGAS_CON_PAIS = [
     [/^(l\.?f\.?-?2|segunda feb|primera feb|liga femenina challenge|liga femenina endesa|liga prime futsal|liga endesa|lf endesa)/i, "es"],
@@ -536,7 +539,8 @@
     var nombreGrupo = infoLiga ? infoLiga[1] : (infoPais ? infoPais[1] : (ICONOS_SIN_PAIS[pais] || nombreLigaRow(pais, "")));
     var liga;
     if (ligaTxt) liga = (infoPais ? infoPais[1] + ": " : "") + ligaTxt;          // "USL Championship Final"
-    else if (ligaSlug && !infoLiga) liga = (infoPais ? infoPais[1] + ": " : "") + nombreLigaRow(ligaSlug, clavePais);   // "Bolivia: LFPB"
+    else if (ligaSlug && !infoLiga) liga = (infoPais ? infoPais[1] + ": " : "") +
+      (ICONOS_SIN_PAIS[ligaSlug] || nombreLigaRow(ligaSlug, clavePais));   // "Bolivia: LFPB" · "NASCAR" · "Noticias"
     else liga = nombreGrupo || "VIPBox";
     var vivo = !t || t <= Date.now() + 5 * 60 * 1000;
     return {
@@ -682,6 +686,10 @@
         } else extra.push(v);
       }
     });
+    // Canales 24 h de las páginas de categoría: se suman si «en vivo ahora» no trae ya el mismo link.
+    var hrefs = {};
+    extra.forEach(function (e) { hrefs[e.href] = true; });
+    canales.forEach(function (c) { if (!hrefs[c.href]) { hrefs[c.href] = true; extra.push(c); } });
     base.forEach(estimarEstado);
     extra.forEach(aplicarMemoria);  // lo que quedó solo en VIPBox: a su liga, si se la conoce de MadPlay77
     extra.forEach(estimarEstado);   // lo de VIPBox también: tarda en sacar lo que ya terminó
@@ -1011,6 +1019,16 @@
       });
       validarSenalEnVivo(principales);
       if (!guardada) recordarEquipos(principales);
+      dibujar();
+    },
+    setCanales: function (json) {
+      var o;
+      try { o = typeof json === "string" ? JSON.parse(json) : json; } catch (e) { return; }
+      var vistos = {};
+      canales = (o.items || []).map(interpretarVip).filter(function (x) {
+        if (!x || !x.canal || vistos[x.href]) return false;   // solo lo que no tiene horario
+        vistos[x.href] = true; return true;
+      });
       dibujar();
     },
     setMapa: function (json) {

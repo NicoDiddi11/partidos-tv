@@ -268,6 +268,7 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 uiLista = true;
                 enviarSitios();
+                enviarCanales();        // los canales 24 h guardados se ven desde el primer momento
                 estado("Cargando " + sitios[sitio][0] + "…");
             }
         });
@@ -730,7 +731,7 @@ public class MainActivity extends Activity {
             {"baseball", "baseball"}, {"mlb", "baseball"}, {"basketball", "basketball"}, {"nba", "basketball"},
             {"boxing", "fighting"}, {"fight-sport", "fighting"}, {"fighting", "fighting"}, {"mma", "fighting"},
             {"ufc", "fighting"}, {"wwe", "fighting"}, {"cycling", "cycling"}, {"darts", "darts"},
-            {"football", "football"}, {"soccer", "football"}, {"formula-1", "motorsport"}, {"moto-racing", "motorsport"},
+            {"football", "football"}, {"soccer", "football"}, {"formula-1", "motorsport"}, {"f1", "motorsport"}, {"moto-racing", "motorsport"},
             {"motogp", "motorsport"}, {"moto-gp", "motorsport"}, {"motorsports", "motorsport"}, {"nascar", "motorsport"},
             {"golf", "golf"}, {"ice-hockey", "hockey"}, {"nhl", "hockey"}, {"rugby", "rugby"}, {"snooker", "snooker"},
             {"tennis", "tennis"}, {"volleyball", "volleyball"}, {"cricket", "cricket"}, {"handball", "handball"},
@@ -740,7 +741,8 @@ public class MainActivity extends Activity {
             "href=\"/(?:sports-)?([a-z0-9-]+?)-(?:stream|online)\"");
     static final java.util.regex.Pattern P_SECCION = java.util.regex.Pattern.compile(
             "href=\"/([^\"/]+)/[^\"/]+-(?:stream-live|online-stream)\"");
-    static final long MAPA_CADA_MS = 24L * 3600 * 1000;
+    // Cada 12 h: el mapa cambia poco, pero las señales de un torneo (ATP Finals…) vienen y van.
+    static final long MAPA_CADA_MS = 12L * 3600 * 1000;
     boolean armandoMapa;
     /** La app no está a la vista (estás en el navegador viendo un partido, o la tele en el protector). */
     volatile boolean pausada;
@@ -754,11 +756,16 @@ public class MainActivity extends Activity {
     void actualizarMapaSiHaceFalta() {
         if (armandoMapa || sitiosVip.length == 0) return;
         long hace = System.currentTimeMillis() - prefs.getLong("mapaFecha", 0);
-        if (hace < MAPA_CADA_MS && !prefs.getString("mapaLigas", "").isEmpty()) return;
+        // Recién actualizada a la versión con canales, todavía no hay ninguno guardado: se arma ya.
+        if (hace < MAPA_CADA_MS && !prefs.getString("mapaLigas", "").isEmpty() && prefs.contains("canales")) return;
         armandoMapa = true;
         final String[][] lista = sitiosVip;
         new Thread(() -> {
             JSONObject mapa = new JSONObject();
+            // Canales y señales fijas SIN horario (Sky F1, NFL RedZone, Fox AFL TV…): no están en «en vivo
+            // ahora», solo en las páginas de categoría. Se juntan en esta misma pasada, sin bajar nada extra.
+            JSONArray canales = new JSONArray();
+            java.util.Set<String> canalesVistos = new java.util.HashSet<>();
             int paginas = 0;
             long inicio = SystemClock.elapsedRealtime();
             for (String[] s : lista) {
@@ -766,21 +773,32 @@ public class MainActivity extends Activity {
                     Uri u = Uri.parse(s[1]);
                     String base = u.getScheme() + "://" + u.getHost(), dom = dominioBase(u.getHost());
                     java.util.regex.Matcher mc = P_CATEGORIA.matcher(bajar(base + "/"));
+                    // Todas las categorías: las conocidas aportan al mapa; las mezcladas («more», «others»)
+                    // solo aportan canales (mezclan deportes, no sirven para decir de qué es cada liga).
                     java.util.LinkedHashMap<String, String> cats = new java.util.LinkedHashMap<>();
                     while (mc.find()) {
+                        if (mc.group(1).startsWith("live-now")) continue;
                         String dep = deporteDeCategoria(mc.group(1));
                         String ruta = mc.group(0).substring(6, mc.group(0).length() - 1);   // "/football-stream"
-                        if (dep != null) cats.put(ruta, dep);
+                        cats.put(ruta, dep == null ? "" : dep);
                     }
                     for (java.util.Map.Entry<String, String> c : cats.entrySet()) {
                         // Saliste de la app (a mirar un partido): se corta para no competir con el video
                         // por el Wi-Fi; se vuelve a intentar la próxima vez (no se guarda un mapa a medias).
                         if (pausada) throw new InterruptedException("app en segundo plano");
                         try {
-                            java.util.regex.Matcher ms = P_SECCION.matcher(bajar(base + c.getKey()));
-                            while (ms.find()) {
-                                String clave = dom + "|" + ms.group(1);
-                                if (!mapa.has(clave)) mapa.put(clave, c.getValue());
+                            String pagina = bajar(base + c.getKey());
+                            if (!c.getValue().isEmpty()) {
+                                java.util.regex.Matcher ms = P_SECCION.matcher(pagina);
+                                while (ms.find()) {
+                                    String clave = dom + "|" + ms.group(1);
+                                    if (!mapa.has(clave)) mapa.put(clave, c.getValue());
+                                }
+                            }
+                            for (JSONObject e : eventosDe(base, pagina, s[0])) {
+                                if (!e.optString("t").isEmpty()) continue;            // solo los sin horario
+                                String id = e.optString("id"), clave = id.isEmpty() ? e.optString("href") : id;
+                                if (canalesVistos.add(clave)) canales.put(e);
                             }
                             paginas++;
                             Thread.sleep(300);   // sin apuro: que no compita con la tele
@@ -794,16 +812,28 @@ public class MainActivity extends Activity {
             }
             final boolean cortado = pausada;
             final String json = mapa.toString();
-            final int n = mapa.length(), pags = paginas;
+            String jc;
+            try {
+                jc = new JSONObject().put("ok", true).put("items", canales).toString();
+            } catch (Exception e) {
+                jc = "";
+            }
+            final String jsonCanales = jc;
+            final int n = mapa.length(), nc = canales.length(), pags = paginas;
             final long ms = SystemClock.elapsedRealtime() - inicio;
             handler.post(() -> {
                 armandoMapa = false;
                 if (cortado) { Log.i("PartidosTV", "mapa: cortado al salir de la app, se reintenta después"); return; }
                 if (n == 0) return;
-                prefs.edit().putString("mapaLigas", json).putLong("mapaFecha", System.currentTimeMillis()).apply();
-                Log.i("PartidosTV", "mapa de ligas: " + n + " secciones de " + pags + " páginas en " + ms / 1000 + " s");
+                prefs.edit().putString("mapaLigas", json).putString("canales", jsonCanales)
+                        .putLong("mapaFecha", System.currentTimeMillis()).apply();
+                Log.i("PartidosTV", "mapa de ligas: " + n + " secciones, " + nc + " canales, de " + pags + " páginas en " + ms / 1000 + " s");
                 volcarArchivo("mapa.json", json);
-                if (uiLista) ui.evaluateJavascript("app.setMapa(" + JSONObject.quote(json) + ")", null);
+                volcarArchivo("canales.json", jsonCanales);
+                if (uiLista) {
+                    ui.evaluateJavascript("app.setMapa(" + JSONObject.quote(json) + ")", null);
+                    enviarCanales();
+                }
             });
         }, "mapa").start();
     }
@@ -824,6 +854,13 @@ public class MainActivity extends Activity {
     void estado(String texto) {
         if (!uiLista) return;
         ui.evaluateJavascript("app.setStatus(" + JSONObject.quote(texto) + ")", null);
+    }
+
+    /** Canales sin horario guardados en la última pasada por las categorías (ver actualizarMapaSiHaceFalta). */
+    void enviarCanales() {
+        if (!uiLista) return;
+        String c = prefs.getString("canales", "");
+        if (!c.isEmpty()) ui.evaluateJavascript("app.setCanales(" + JSONObject.quote(c) + ")", null);
     }
 
     void enviarSitios() {
